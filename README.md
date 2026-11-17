@@ -14,15 +14,19 @@
 
 [Open the interactive prototype →](https://yy568821795-max.github.io/arthas-workbench/preview/)
 
-Review target switching, connection checks, process selection, diagnostic forms, cancellation and both themes. All data and actions in the static preview are simulated. You can also open `docs/preview/index.html` directly after cloning; no runtime or credentials are needed.
+Explore the redesigned connections workspace, session history, MCP client setup, and resource/connector roadmap. Search local/Kubernetes targets, verify MCP capabilities, scan and confirm Attach, run diagnostic forms, cancel tasks, and switch themes. The layout also works on phones. All data and actions in the static preview are simulated. You can open `docs/preview/index.html` directly after cloning; no runtime or credentials are needed.
+
+The UI distinguishes an endpoint being reachable from an explicit MCP verification. It offers no interactive Telnet terminal; new local Attach defaults to `telnetPort=-1`. OGNL, Profiler, hot update and automated resource delivery are visible but clearly marked as not yet implemented. See [interface behavior and design](docs/UI.md).
+
+### Dark
+
+![Arthas Workbench dark theme — simulated diagnostic targets](docs/images/prototype-dark.png)
 
 ### Light
 
 ![Arthas Workbench light theme — simulated diagnostic targets](docs/images/prototype-light.png)
 
-### Dark
-
-![Arthas Workbench dark theme — simulated diagnostic targets](docs/images/prototype-dark.png)
+[View the mobile diagnostic screen](docs/images/prototype-mobile.png)
 
 [Send UI feedback](https://github.com/yy568821795-max/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the theme, viewport and steps; remove credentials and private target names from screenshots.
 
@@ -30,7 +34,7 @@ Review target switching, connection checks, process selection, diagnostic forms,
 
 | Capability | Prototype status |
 | --- | --- |
-| Web workspace | Token login, authorized targets, connection probes, diagnostics, cancellation, light/dark themes |
+| Web workspace | Responsive dark/light workspace, target search/filters, MCP verification, diagnostic forms, cancellation, session history, MCP setup templates |
 | Local Java | Outbound connector, loopback Arthas forwarding, `jps` discovery, optional explicit Attach |
 | Kubernetes | Configured kubeconfig/namespace/Pod → owned `kubectl port-forward` → existing Arthas |
 | MCP endpoint | Streamable HTTP at `/mcp`; per-request authentication and explicit instance selection |
