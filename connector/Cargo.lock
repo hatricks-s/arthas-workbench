@@ -6,7 +6,7 @@ version = 4
 name = "arthas-connector"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "futures-util",
  "libc",
  "reqwest",
