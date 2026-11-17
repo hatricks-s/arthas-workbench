@@ -139,6 +139,42 @@ async fn outbound_handshake_attach_stream_cancel_and_owned_forward_cleanup() {
             local_unavailable = true;
         }
     }
+    // A fixture must not reply before the request has arrived, including when
+    // Windows accept() inherits the nonblocking listener mode. Fragment headers
+    // deliberately so a single read() cannot accidentally make this test pass.
+    let fixture_port: u16 = std::fs::read_to_string(data.join("fixture-forward-port"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut probe = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, fixture_port))
+        .await
+        .unwrap();
+    let mut first = [0; 1];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), probe.read(&mut first))
+            .await
+            .is_err(),
+        "fixture must wait for an HTTP request before replying"
+    );
+    probe.write_all(b"GET /mcp HTTP/1.1\r\n").await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), probe.read(&mut first))
+            .await
+            .is_err(),
+        "fixture must wait for the complete HTTP headers"
+    );
+    probe
+        .write_all(b"Host: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), probe.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    assert!(response.ends_with(b"\r\n\r\n{}"));
+
     let scan = Uuid::new_v4();
     send(
         &mut ws,
@@ -261,7 +297,8 @@ async fn outbound_handshake_attach_stream_cancel_and_owned_forward_cleanup() {
     }
     let id = Uuid::new_v4();
     send(&mut ws,json!({"type":"request","id":id,"target_id":"pod","method":"GET","path":"/mcp","headers":{},"body_base64":"","timeout_ms":10000})).await;
-    assert_eq!(result(&mut ws, id).await["type"], "response_start");
+    let start = result(&mut ws, id).await;
+    assert_eq!(start["type"], "response_start", "{start}");
     assert_eq!(result(&mut ws, id).await["type"], "response_chunk");
     assert_eq!(result(&mut ws, id).await["type"], "response_end");
 
