@@ -37,7 +37,11 @@ async def port_open(port):
     except (OSError, asyncio.TimeoutError):
         return False
     writer.close()
-    await writer.wait_closed()
+    # Windows may report a peer reset while the short-lived probe is closing.
+    # The handshake succeeded, so conservatively report open and probe again;
+    # a reset during cleanup is not proof that the listener has disappeared.
+    with contextlib.suppress(ConnectionResetError):
+        await writer.wait_closed()
     return True
 
 

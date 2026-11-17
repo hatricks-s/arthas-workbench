@@ -2,9 +2,36 @@
 import asyncio
 import os
 import unittest
+from unittest.mock import AsyncMock, Mock, patch
 
-from smoke_connector import BINARY, RustFixture, process_alive
+from smoke_connector import BINARY, RustFixture, port_open, process_alive
 from support import eventually
+
+
+class PortProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_peer_reset_during_close_does_not_prove_port_closed(self):
+        writer = Mock()
+        writer.wait_closed = AsyncMock(side_effect=ConnectionResetError(10054, "peer reset"))
+        with patch("smoke_connector.asyncio.open_connection", new_callable=AsyncMock) as connect:
+            connect.return_value = (object(), writer)
+            self.assertTrue(await port_open(12345))
+            connect.assert_awaited_once_with("127.0.0.1", 12345)
+        writer.close.assert_called_once()
+        writer.wait_closed.assert_awaited_once()
+
+    async def test_refused_connection_reports_port_closed(self):
+        with patch("smoke_connector.asyncio.open_connection", new_callable=AsyncMock) as connect:
+            connect.side_effect = ConnectionRefusedError("no listener")
+            self.assertFalse(await port_open(12345))
+
+    async def test_probe_close_does_not_swallow_cancellation(self):
+        writer = Mock()
+        writer.wait_closed = AsyncMock(side_effect=asyncio.CancelledError)
+        with patch("smoke_connector.asyncio.open_connection", new_callable=AsyncMock) as connect:
+            connect.return_value = (object(), writer)
+            with self.assertRaises(asyncio.CancelledError):
+                await port_open(12345)
+        writer.close.assert_called_once()
 
 
 @unittest.skipUnless(BINARY.is_file() and os.name == "nt", "build the Windows Rust connector before running real-connector smoke")
