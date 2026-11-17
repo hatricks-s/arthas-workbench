@@ -1,259 +1,652 @@
-import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import vm from 'node:vm';
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 
-const adapter = readFileSync(new URL('../docs/preview/mock.js', import.meta.url), 'utf8');
-const tools = ['jvm', 'memory', 'thread', 'version', 'trace', 'watch'];
-const origins = [
-  'file:///C:/checkout/docs/preview/index.html',
-  'https://example.github.io/arthas-workbench/preview/',
-  'http://localhost:8080/docs/preview/'
-];
-for (const href of origins) {
-  let clock = 0, nativeCalls = 0, submitted = 0, onReady;
-  const token = {value: ''};
-  const loginForm = {requestSubmit() {
-    assert.equal(token.value, 'preview-only-not-a-real-token');
-    submitted++;
-  }};
-  const sandbox = {
-    window: {fetch() { nativeCalls++; throw new Error('Native network must never run'); }},
-    document: {
-      addEventListener(event, handler) { assert.equal(event, 'DOMContentLoaded'); onReady = handler; },
-      querySelector(selector) {
-        assert.ok(['#token', '#login-form'].includes(selector));
-        return selector === '#token' ? token : loginForm;
-      }
-    },
-    location: {href}, URL, Response,
-    Date: class extends Date {static now() {return clock;}}
-  };
-  vm.runInNewContext(adapter, sandbox);
-  assert.equal(sandbox.window.WORKBENCH_PREVIEW, true);
-  assert.equal(submitted, 0);
-  onReady();
-  assert.equal(submitted, 1);
-  const fetch = sandbox.window.fetch;
-  const readState = async () => (await fetch('/api/state')).json();
-  const readJob = async job => (await fetch(`/api/jobs/${job.id}`)).json();
-  const post = operation => fetch('/api/jobs', {method: 'POST', body: JSON.stringify(operation)});
-  const start = async operation => {
-    const response = await post(operation);
-    assert.equal(response.status, 202);
-    const created = await response.json();
-    assert.equal(created.status, 'running');
-    return created;
-  };
-  const reject = async (operation, message) => {
-    const response = await post(operation);
-    assert.equal(response.status, 400);
-    assert.match((await response.json()).error, message);
-  };
-  const finish = async (job, delay = 700) => {
-    let current = await readJob(job);
-    assert.equal(current.status, 'running');
-    assert.equal(current.result, null);
-    clock += delay - 1;
-    current = await readJob(job);
-    assert.equal(current.status, 'running');
-    assert.equal(current.result, null);
-    clock++;
-    current = await readJob(job);
-    assert.equal(current.status, 'succeeded');
-    assert.equal(current.error, null);
-    assert.equal(current.result.simulated, true);
-    return current.result;
-  };
-  const cancel = async job => {
-    const response = await fetch(`/api/jobs/${job.id}`, {method: 'DELETE'});
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), {id: job.id, cancel_requested: true});
-    clock += 5000;
-    const cancelled = await readJob(job);
-    assert.equal(cancelled.status, 'cancelled');
-    assert.equal(cancelled.result, null);
-    assert.match(cancelled.error, /已取消/);
-  };
+const source = readFileSync(
+    new URL("../ui-prototype/model.js", import.meta.url),
+    "utf8",
+);
+const baseTime = Date.UTC(2026, 0, 15, 9);
+const plain = (value) => JSON.parse(JSON.stringify(value));
+const patterns = {
+    classPattern: "demo.orders.OrderService",
+    methodPattern: "createOrder",
+};
+const forbidden = () => {
+    throw new Error(
+        "Offline model must not use network, storage, DOM, timers, or randomness",
+    );
+};
 
-  const initial = await readState();
-  assert.equal(initial.instances.length, 4);
-  assert.equal(initial.instances[0].id, 'workstation:order-service');
-  assert.equal(initial.instances[0].kind, 'local');
-  assert.equal(initial.instances[0].status, 'ready');
-  assert.equal(initial.instances[1].id, 'test-cluster:payment-pod');
-  assert.equal(initial.instances[1].kind, 'k8s');
-  assert.equal(initial.instances.filter(instance => instance.kind === 'local').length, 2);
-  assert.equal(initial.instances.filter(instance => instance.kind === 'k8s').length, 2);
-  assert.deepEqual(initial.instances.map(instance => instance.status).sort(), ['offline', 'ready', 'unavailable', 'unknown']);
-  assert.equal(new Set(initial.instances.map(instance => instance.id)).size, 4);
-  assert.ok(initial.scopes.includes('attach'));
-  for (const instance of initial.instances) {
-    const connector = initial.nodes.find(node => node.id === instance.node_id);
-    assert.ok(connector);
-    assert.equal(instance.id, `${instance.node_id}:${instance.target_id}`);
-    assert.equal(connector.online, instance.status !== 'offline');
-    assert.deepEqual(connector.capabilities, instance.kind === 'local' ? ['scan_java', 'attach_local'] : []);
-  }
-  const ready = initial.instances[0];
-  const unknown = initial.instances.find(instance => instance.status === 'unknown');
-  const unavailable = initial.instances.find(instance => instance.status === 'unavailable');
-  const offline = initial.instances.find(instance => instance.status === 'offline');
-
-  // Root-relative APIs work under file:// and hosted subdirectories; same-origin URLs also work.
-  const stateURL = new URL('/api/state?preview=1', href);
-  assert.deepEqual(await (await fetch(stateURL.href)).json(), initial);
-  assert.deepEqual(await (await fetch(stateURL)).json(), initial);
-  assert.deepEqual(await (await fetch(new Request(stateURL))).json(), initial);
-  const scanRequest = new Request(new URL('/api/jobs', href), {
-    method: 'POST', body: JSON.stringify({action: 'scan_java', node_id: ready.node_id})
-  });
-  const scanResponse = await fetch(scanRequest);
-  assert.equal(scanResponse.status, 202);
-  const scanned = await finish(await scanResponse.json());
-  assert.equal(scanned.available, true);
-  assert.deepEqual(scanned.processes, [
-    {pid: 24080, identity: 'demo.OrderService -Xmx1g'},
-    {pid: 28120, identity: 'demo.InventoryService -Xmx512m'}
-  ]);
-
-  // Offline connectors reject every operation and never become ready.
-  for (const operation of [
-    {action: 'probe', instance_id: offline.id},
-    {action: 'diagnose', instance_id: offline.id, tool: 'jvm'},
-    {action: 'scan_java', node_id: offline.node_id},
-    {action: 'attach_local', instance_id: offline.id, ...scanned.processes[0]}
-  ]) await reject(operation, /离线/);
-  await reject({action: 'scan_java', node_id: unavailable.node_id}, /不支持扫描/);
-  await reject({action: 'attach_local', instance_id: unavailable.id, ...scanned.processes[0]}, /仅本机/);
-  await reject({action: 'diagnose', instance_id: unavailable.id, tool: 'jvm'}, /尚未就绪/);
-  await reject({action: 'diagnose', instance_id: ready.id, tool: 'ognl'}, /未实现/);
-  await reject({action: 'diagnose', instance_id: ready.id, tool: 'not-a-tool'}, /未实现/);
-  await reject({action: 'probe', instance_id: 'missing:target'}, /不存在/);
-  await reject({action: 'scan_java', node_id: 'missing'}, /不存在/);
-  await reject({action: 'attach_local', instance_id: unknown.id, pid: 28120, identity: 'wrong-process'}, /准确 PID/);
-  await reject({action: 'attach_local', instance_id: unknown.id, pid: 99999, identity: scanned.processes[1].identity}, /准确 PID/);
-  await reject({action: 'unsupported'}, /不支持/);
-  await reject(null, /操作对象/);
-  await reject([], /操作对象/);
-  const invalidJSON = await fetch('/api/jobs', {method: 'POST', body: '{'});
-  assert.equal(invalidJSON.status, 400);
-  assert.deepEqual(await readState(), initial);
-
-  // Cancelled probes cannot recover either unknown or unavailable targets, even after their deadline.
-  for (const target of [unknown, unavailable]) {
-    const probe = await start({action: 'probe', instance_id: target.id});
-    clock += 699;
-    assert.equal((await readJob(probe)).status, 'running');
-    assert.deepEqual(await readState(), initial);
-    await cancel(probe);
-    assert.deepEqual(await readState(), initial);
-  }
-  const recovery = await start({action: 'probe', instance_id: unavailable.id});
-  clock += 699;
-  assert.equal((await readJob(recovery)).status, 'running');
-  assert.deepEqual(await readState(), initial);
-  clock++;
-  const recovered = await readJob(recovery);
-  assert.equal(recovered.status, 'succeeded');
-  assert.equal(recovered.result.simulated, true);
-  assert.equal(recovered.result.instance, unavailable.id);
-  assert.equal(recovered.result.tasks, true);
-  assert.deepEqual(recovered.result.tools, tools);
-  const afterRecovery = await readState();
-  assert.equal(afterRecovery.instances.find(instance => instance.id === unavailable.id).status, 'ready');
-  assert.equal(afterRecovery.instances.find(instance => instance.id === unknown.id).status, 'unknown');
-  assert.equal(afterRecovery.instances.find(instance => instance.id === offline.id).status, 'offline');
-  const finishedCancel = await fetch(`/api/jobs/${recovery.id}`, {method: 'DELETE'});
-  assert.equal((await finishedCancel.json()).cancel_requested, false);
-  assert.equal((await readJob(recovery)).status, 'succeeded');
-  assert.deepEqual(await readState(), afterRecovery);
-
-  // Attach updates the selected registered target only after success; cancellation leaves it untouched.
-  const attachOperation = {action: 'attach_local', instance_id: unknown.id, ...scanned.processes[1]};
-  const cancelledAttach = await start(attachOperation);
-  clock += 699;
-  assert.equal((await readJob(cancelledAttach)).result, null);
-  assert.deepEqual(await readState(), afterRecovery);
-  await cancel(cancelledAttach);
-  assert.deepEqual(await readState(), afterRecovery);
-  const attach = await start(attachOperation);
-  assert.deepEqual(await readState(), afterRecovery);
-  const attached = await finish(attach);
-  assert.equal(attached.success, true);
-  assert.equal(attached.instance, unknown.id);
-  assert.equal(attached.pid, scanned.processes[1].pid);
-  assert.equal(attached.identity, scanned.processes[1].identity);
-  const afterAttach = await readState();
-  assert.equal(afterAttach.instances.length, 4);
-  const attachedTarget = afterAttach.instances.find(instance => instance.id === unknown.id);
-  assert.equal(attachedTarget.status, 'ready');
-  assert.match(attachedTarget.detail, /28120/);
-  assert.deepEqual(afterAttach.instances.filter(instance => instance.id !== unknown.id), afterRecovery.instances.filter(instance => instance.id !== unknown.id));
-  assert.deepEqual((await readJob(attach)).result, attached);
-  assert.deepEqual(await readState(), afterAttach);
-
-  // All six implemented tools return distinct, stable examples with no claimed live measurements.
-  const results = new Map();
-  for (const tool of tools) {
-    const operation = {action: 'diagnose', instance_id: ready.id, tool,
-      arguments: {classPattern: 'demo.OrderService', methodPattern: 'createOrder', express: '{params,returnObj,throwExp}'}};
-    const result = await finish(await start(operation), ['trace', 'watch'].includes(tool) ? 3500 : 700);
-    assert.equal(result.instance, ready.id);
-    assert.equal(result.tool, tool);
-    results.set(tool, result);
-  }
-  assert.equal(results.get('jvm').pid, 24080);
-  assert.deepEqual(results.get('memory').heap, {used: null, committed: null, max: null});
-  assert.ok(results.get('thread').threads.length > 0);
-  assert.match(results.get('version').version, /mock/);
-  assert.equal(results.get('trace').class, 'demo.OrderService');
-  assert.equal(results.get('trace').method, 'createOrder');
-  assert.ok(results.get('trace').calls.length > 0);
-  assert.equal(results.get('trace').elapsed_ms, undefined);
-  assert.equal(results.get('watch').sample.params[0].orderId, 'DEMO-1001');
-  assert.equal(results.get('watch').sample.throwExp, null);
-  const repeat = await finish(await start({action: 'diagnose', instance_id: ready.id, tool: 'jvm'}));
-  assert.deepEqual(repeat, results.get('jvm'));
-  const inventoryJvm = await finish(await start({action: 'diagnose', instance_id: unknown.id, tool: 'jvm'}));
-  assert.equal(inventoryJvm.pid, attached.pid);
-  assert.equal(inventoryJvm.process, attached.identity);
-  for (const tool of ['trace', 'watch']) {
-    const job = await start({action: 'diagnose', instance_id: ready.id, tool, arguments: {classPattern: 'demo.OrderService'}});
-    clock += 700;
-    assert.equal((await readJob(job)).status, 'running');
-    await cancel(job);
-  }
-  assert.deepEqual(await readState(), afterAttach);
-
-  // Unsupported routes/methods and foreign origins must throw, without delegating to native fetch.
-  for (const input of [
-    'https://untrusted.example/real-network',
-    'https://untrusted.example/api/state',
-    '//untrusted.example/api/state',
-    'https://example.github.io.untrusted.example/api/state',
-    'https://example.github.io@untrusted.example/api/state',
-    'file://untrusted.example/api/state',
-    'data:/api/state',
-    'blob:https://untrusted.example/api/state',
-    new URL('https://untrusted.example/api/state'),
-    new Request('https://untrusted.example/api/state'),
-    '/api/unknown', '/api/jobs', '/api/jobs/preview-1/extra'
-  ]) await assert.rejects(() => fetch(input), /禁止真实网络请求/);
-  if (new URL(href).protocol !== 'file:') {
-    await assert.rejects(() => fetch('file:///api/state'), /禁止真实网络请求/);
-    const foreignPort = new URL('/api/state', href);
-    foreignPort.port = '9999';
-    await assert.rejects(() => fetch(foreignPort.href), /禁止真实网络请求/);
-  } else {
-    await assert.rejects(() => fetch('file:///D:/api/state'), /禁止真实网络请求/);
-  }
-  await assert.rejects(() => fetch('https://untrusted.example/api/jobs', {method: 'POST', body: JSON.stringify(attachOperation)}), /禁止真实网络请求/);
-  await assert.rejects(() => fetch('/api/state', {method: 'POST'}), /禁止真实网络请求/);
-  await assert.rejects(() => fetch('/api/jobs', {method: 'GET'}), /禁止真实网络请求/);
-  await assert.rejects(() => fetch(`/api/jobs/${attach.id}`, {method: 'PATCH'}), /禁止真实网络请求/);
-  assert.equal((await fetch('/api/jobs/missing')).status, 404);
-  assert.equal((await fetch('/api/jobs/missing', {method: 'DELETE'})).status, 404);
-  assert.equal(nativeCalls, 0);
-  assert.deepEqual(await readState(), afterAttach);
+function fixture() {
+    let clock = baseTime;
+    const window = {};
+    const sandbox = {
+        window,
+        Date: class extends Date {
+            static now() {
+                return clock;
+            }
+        },
+    };
+    for (const name of [
+        "fetch",
+        "XMLHttpRequest",
+        "WebSocket",
+        "EventSource",
+        "setTimeout",
+        "setInterval",
+        "requestAnimationFrame",
+    ]) {
+        sandbox[name] = window[name] = forbidden;
+    }
+    for (const name of [
+        "document",
+        "localStorage",
+        "sessionStorage",
+        "indexedDB",
+        "navigator",
+    ]) {
+        Object.defineProperty(sandbox, name, { get: forbidden });
+        Object.defineProperty(window, name, { get: forbidden });
+    }
+    const context = vm.createContext(sandbox);
+    vm.runInContext(
+        'Math.random = () => { throw new Error("Random data is forbidden"); };',
+        context,
+    );
+    vm.runInContext(source, context, { filename: "ui-prototype/model.js" });
+    assert.equal(typeof window.WorkbenchDemo.createStore, "function");
+    const store = window.WorkbenchDemo.createStore({ now: () => clock });
+    return {
+        store,
+        window,
+        advance(ms) {
+            clock += ms;
+            store.tick();
+        },
+        elapse(ms) {
+            clock += ms;
+        },
+    };
 }
-console.log('Static preview: file, HTTP and HTTPS origins; auto login; 4 targets; 6 simulated tools; scan/attach; offline rejection; cancellation; probe recovery; foreign-origin and unknown-request guards passed.');
+
+const checks = [];
+function check(name, body) {
+    body();
+    checks.push(name);
+    console.log(`PASS ${name}`);
+}
+
+check(
+    "deterministic seeds, complete identities, independent stores, and default clock",
+    () => {
+        const first = fixture();
+        const second = fixture();
+        const { store } = first;
+        assert.deepEqual(plain(store.state), plain(second.store.state));
+        assert.deepEqual(
+            plain(first.window.WorkbenchDemo.createStore().state),
+            plain(store.state),
+        );
+        assert.deepEqual(
+            Object.keys(store).sort(),
+            [
+                "state",
+                "listPods",
+                "startTask",
+                "cancelTask",
+                "tick",
+                "disconnect",
+                "replacePod",
+                "setPolicy",
+                "scanLocal",
+                "connect",
+            ].sort(),
+        );
+        assert.deepEqual(
+            plain(store.state.environments.map((item) => [item.id, item.name])),
+            [
+                ["production", "生产环境"],
+                ["staging", "预发环境"],
+                ["development", "开发环境"],
+            ],
+        );
+        assert.deepEqual(plain(store.state.apps.map((item) => item.id)), [
+            "orders",
+            "payments",
+            "inventory",
+            "gateway",
+        ]);
+        assert.ok(
+            store.state.apps.every(
+                (item) =>
+                    item.name &&
+                    item.description &&
+                    item.owner &&
+                    item.javaVersion === "21.0.5",
+            ),
+        );
+        assert.equal(store.state.pods.length, 31);
+        for (const [environment, count] of [
+            ["production", 6],
+            ["staging", 3],
+            ["development", 2],
+        ]) {
+            assert.equal(store.listPods(environment, "orders").length, count);
+            for (const app of ["payments", "inventory", "gateway"])
+                assert.equal(store.listPods(environment, app).length, 2);
+        }
+        const production = store.listPods("production", "orders");
+        assert.deepEqual(plain(production.map((pod) => pod.channel)), [
+            "ready",
+            "ready",
+            "ready",
+            "ready",
+            "reconnecting",
+            "discovered",
+        ]);
+        assert.deepEqual(
+            [...new Set(production.map((pod) => pod.node))],
+            ["worker-01", "worker-02", "worker-03"],
+        );
+        const locals = store.listPods("local", "local");
+        assert.deepEqual(plain(locals.map((pod) => pod.channel)), [
+            "ready",
+            "discovered",
+        ]);
+        assert.notEqual(locals[0].pid, locals[1].pid);
+        assert.ok(locals.every((pod) => pod.kind === "local"));
+        for (const field of ["key", "podUid"])
+            assert.equal(
+                new Set(store.state.pods.map((pod) => pod[field])).size,
+                31,
+            );
+        const fields = [
+            "key",
+            "environment",
+            "app",
+            "kind",
+            "name",
+            "podUid",
+            "generation",
+            "node",
+            "connector",
+            "container",
+            "pid",
+            "channel",
+            "managed",
+            "restarts",
+            "age",
+            "retired",
+        ];
+        assert.ok(
+            store.state.pods.every((pod) =>
+                fields.every((field) => Object.hasOwn(pod, field)),
+            ),
+        );
+        assert.equal(store.state.tasks.length, 3);
+        const watch = store.state.tasks.find(
+            (task) => task.status === "running",
+        );
+        assert.equal(watch.tool, "watch");
+        assert.equal(watch.deadline, baseTime + 90000);
+        assert.equal(
+            store.state.tasks.find((task) => task.tool === "trace").result.trace
+                .length,
+            5,
+        );
+        assert.equal(
+            store.state.tasks.find((task) => task.tool === "thread").target
+                .environment,
+            "staging",
+        );
+        first.advance(89999);
+        assert.equal(watch.status, "running");
+        first.advance(1);
+        assert.equal(watch.status, "succeeded");
+        assert.equal(production[4].channel, "reconnecting");
+        assert.equal(
+            second.store.state.tasks.find((task) => task.tool === "watch")
+                .status,
+            "running",
+        );
+    },
+);
+
+check(
+    "same application in different environments stays isolated; exact immutable snapshots",
+    () => {
+        const { store, advance } = fixture();
+        const production = store.listPods("production", "orders")[0];
+        const staging = store.listPods("staging", "orders")[0];
+        assert.equal(production.name, staging.name);
+        assert.notEqual(production.key, staging.key);
+        const args = { filter: { labels: ["original"] } };
+        const task = store.startTask(production.key, "jvm", args);
+        const captured = plain(task.target);
+        assert.deepEqual(captured, {
+            ...plain(production),
+            environmentName: "生产环境",
+            appName: "order-service",
+        });
+        assert.ok(Object.isFrozen(task.target));
+        assert.ok(Object.isFrozen(task.parameters.filter.labels));
+        assert.throws(() => {
+            task.target.pid = 999;
+        }, TypeError);
+        args.filter.labels[0] = "changed";
+        assert.equal(task.parameters.filter.labels[0], "original");
+        const stagingBefore = plain(staging);
+        store.disconnect(production.key);
+        assert.deepEqual(plain(staging), stagingBefore);
+        store.listPods("staging", "orders");
+        store.listPods("development", "payments");
+        assert.deepEqual(plain(task.target), captured);
+        advance(3000);
+        assert.equal(task.status, "running");
+        advance(2000);
+        assert.equal(task.status, "succeeded");
+        assert.equal(task.result.jvm.application, "order-service");
+        assert.deepEqual(plain(task.target), captured);
+    },
+);
+
+check(
+    "reconnect recovers only one generation, never resubmits, and explicit connect is idempotent",
+    () => {
+        const { store, advance } = fixture();
+        const pods = store.listPods("production", "orders");
+        const task = store.startTask(pods[0].key, "jvm");
+        const beforeOthers = plain(
+            store.state.pods.filter((pod) => pod.key !== pods[0].key),
+        );
+        const taskIds = plain(store.state.tasks.map((item) => item.id));
+        store.disconnect(pods[0].key);
+        advance(4999);
+        assert.equal(pods[0].channel, "reconnecting");
+        assert.equal(task.status, "running");
+        advance(1);
+        assert.equal(pods[0].channel, "ready");
+        assert.equal(task.status, "succeeded");
+        assert.deepEqual(
+            plain(store.state.pods.filter((pod) => pod.key !== pods[0].key)),
+            beforeOthers,
+        );
+        assert.deepEqual(
+            plain(store.state.tasks.map((item) => item.id)),
+            taskIds,
+        );
+        assert.equal(pods[4].channel, "reconnecting");
+        assert.strictEqual(store.connect(pods[4].key), pods[4]);
+        const eventCount = store.state.events.length;
+        advance(1000);
+        store.connect(pods[4].key);
+        assert.equal(store.state.events.length, eventCount);
+        advance(999);
+        assert.equal(pods[4].channel, "reconnecting");
+        advance(1);
+        assert.equal(pods[4].channel, "ready");
+        assert.deepEqual(
+            plain(store.state.tasks.map((item) => item.id)),
+            taskIds,
+        );
+        assert.equal(pods[5].channel, "discovered");
+    },
+);
+
+check(
+    "cancelled tasks stay cancelled; missed deadlines interrupt even on a late tick",
+    () => {
+        const { store, advance, elapse } = fixture();
+        const [pod] = store.listPods("production", "orders");
+        const cancelled = store.startTask(pod.key, "watch", patterns);
+        assert.strictEqual(store.cancelTask(cancelled.id), cancelled);
+        const cancelledSnapshot = plain(cancelled);
+        store.disconnect(pod.key);
+        advance(5000);
+        const expired = store.startTask(pod.key, "jvm", { timeoutSeconds: 5 });
+        elapse(1000);
+        store.disconnect(pod.key);
+        advance(5000);
+        assert.equal(pod.channel, "ready");
+        assert.equal(expired.status, "interrupted");
+        assert.equal(expired.finishedAt, expired.deadline);
+        assert.equal(expired.result, null);
+        advance(120000);
+        store.cancelTask(cancelled.id);
+        store.cancelTask(expired.id);
+        assert.deepEqual(plain(cancelled), cancelledSnapshot);
+        assert.equal(expired.status, "interrupted");
+        assert.equal(
+            store.state.tasks.filter((task) => task.id === expired.id).length,
+            1,
+        );
+    },
+);
+
+check(
+    "same-name replacement retires identity, interrupts immediately, and never replays tasks",
+    () => {
+        const { store, advance } = fixture();
+        const pod = store.listPods("production", "orders")[0];
+        const historical = store.state.tasks.find(
+            (task) => task.tool === "trace",
+        );
+        const historicalSnapshot = plain(historical);
+        const task = store.startTask(pod.key, "trace", patterns);
+        const snapshot = plain(task.target);
+        store.disconnect(pod.key);
+        const replacement = store.replacePod(pod.key);
+        assert.equal(pod.retired, true);
+        assert.equal(pod.channel, "retired");
+        assert.equal(pod.managed, false);
+        assert.equal(replacement.name, pod.name);
+        assert.notEqual(replacement.key, pod.key);
+        assert.notEqual(replacement.podUid, pod.podUid);
+        assert.equal(replacement.generation, pod.generation + 1);
+        assert.equal(replacement.channel, "discovered");
+        assert.equal(task.status, "interrupted");
+        assert.equal(task.finishedAt, baseTime);
+        assert.equal(task.result, null);
+        assert.deepEqual(plain(task.target), snapshot);
+        assert.deepEqual(plain(historical), historicalSnapshot);
+        assert.ok(!store.listPods("production", "orders").includes(pod));
+        assert.equal(store.listPods("production", "orders").length, 6);
+        const taskCount = store.state.tasks.length;
+        advance(20000);
+        assert.equal(replacement.channel, "discovered");
+        assert.equal(pod.channel, "retired");
+        store.connect(replacement.key);
+        advance(2000);
+        assert.equal(replacement.channel, "ready");
+        assert.equal(task.status, "interrupted");
+        assert.equal(store.state.tasks.length, taskCount);
+        assert.throws(() => store.startTask(pod.key, "jvm"), /retired/);
+        assert.throws(() => store.connect(pod.key), /retired/);
+        assert.throws(() => store.replacePod(pod.key), /retired/);
+    },
+);
+
+check(
+    "all policy maintains current and future targets; selected preserves only current intent",
+    () => {
+        const { store, advance } = fixture();
+        const others = plain(
+            store.state.pods.filter(
+                (pod) =>
+                    pod.environment !== "production" || pod.app !== "orders",
+            ),
+        );
+        assert.equal(store.setPolicy("production", "orders", "all"), "all");
+        assert.ok(
+            store.listPods("production", "orders").every((pod) => pod.managed),
+        );
+        advance(2000);
+        assert.ok(
+            store
+                .listPods("production", "orders")
+                .every((pod) => pod.channel === "ready"),
+        );
+        let replacement = store.replacePod(
+            store.listPods("production", "orders")[0].key,
+        );
+        assert.equal(replacement.channel, "reconnecting");
+        assert.equal(replacement.managed, true);
+        const taskCount = store.state.tasks.length;
+        advance(1999);
+        assert.equal(replacement.channel, "reconnecting");
+        advance(1);
+        assert.equal(replacement.channel, "ready");
+        assert.equal(store.state.tasks.length, taskCount);
+        assert.deepEqual(
+            plain(
+                store.state.pods.filter(
+                    (pod) =>
+                        pod.environment !== "production" ||
+                        pod.app !== "orders",
+                ),
+            ),
+            others,
+        );
+        const beforeSelected = plain(store.listPods("production", "orders"));
+        store.setPolicy("production", "orders", "selected");
+        assert.deepEqual(
+            plain(store.listPods("production", "orders")),
+            beforeSelected,
+        );
+        replacement = store.replacePod(replacement.key);
+        assert.equal(replacement.generation, 3);
+        assert.equal(replacement.channel, "discovered");
+        assert.equal(replacement.managed, false);
+        advance(5000);
+        assert.equal(replacement.channel, "discovered");
+    },
+);
+
+check(
+    "discover policy rejects active scope atomically and releases only idle matching channels",
+    () => {
+        const { store, advance } = fixture();
+        const snapshot = plain(store.state);
+        assert.throws(
+            () => store.setPolicy("production", "orders", "discover"),
+            /running tasks/,
+        );
+        assert.deepEqual(plain(store.state), snapshot);
+        store.setPolicy("staging", "orders", "discover");
+        assert.ok(
+            store
+                .listPods("staging", "orders")
+                .every((pod) => !pod.managed && pod.channel === "discovered"),
+        );
+        const production = store.listPods("production", "orders");
+        store.connect(production[5].key);
+        store.cancelTask(
+            store.state.tasks.find((task) => task.status === "running").id,
+        );
+        store.setPolicy("production", "orders", "discover");
+        advance(10000);
+        assert.ok(
+            production.every(
+                (pod) => !pod.managed && pod.channel === "discovered",
+            ),
+        );
+        assert.equal(store.state.policies["production/orders"], "discover");
+        store.connect(production[0].key);
+        advance(2000);
+        assert.equal(production[0].channel, "ready");
+        assert.equal(production[0].managed, true);
+        assert.equal(production[1].channel, "discovered");
+    },
+);
+
+check(
+    "local scans discover one stable JVM once and honor future all-policy intent",
+    () => {
+        const { store, advance } = fixture();
+        const clusters = plain(
+            store.state.pods.filter((pod) => pod.kind === "k8s"),
+        );
+        const scanned = store.scanLocal();
+        assert.equal(scanned.length, 3);
+        assert.equal(new Set(scanned.map((pod) => pod.pid)).size, 3);
+        assert.equal(scanned[2].channel, "discovered");
+        const state = plain(store.state);
+        assert.deepEqual(plain(store.scanLocal()), plain(scanned));
+        assert.deepEqual(plain(store.state), state);
+        store.connect(scanned[2].key);
+        advance(2000);
+        assert.equal(scanned[2].channel, "ready");
+        assert.deepEqual(
+            plain(store.state.pods.filter((pod) => pod.kind === "k8s")),
+            clusters,
+        );
+        const future = fixture();
+        future.store.setPolicy("local", "local", "all");
+        const locals = future.store.scanLocal();
+        assert.equal(locals[2].channel, "reconnecting");
+        future.advance(2000);
+        assert.ok(
+            locals.every((pod) => pod.managed && pod.channel === "ready"),
+        );
+    },
+);
+
+check(
+    "tool validation rejects invalid input without mutations; each tool produces a simulated result",
+    () => {
+        const { store, advance } = fixture();
+        const pods = store.listPods("production", "orders");
+        const before = plain(store.state);
+        const invalid = [
+            ["missing", "jvm", {}, /unknown target/],
+            [pods[4].key, "jvm", {}, /not ready/],
+            [pods[5].key, "jvm", {}, /not ready/],
+            [pods[0].key, "version", {}, /unsupported tool/],
+            [pods[0].key, "__proto__", {}, /unsupported tool/],
+            [pods[0].key, "jvm", null, /parameters/],
+            [pods[0].key, "jvm", [], /parameters/],
+            [pods[0].key, "trace", {}, /classPattern/],
+            [pods[0].key, "watch", { classPattern: "demo.*" }, /methodPattern/],
+            [
+                pods[0].key,
+                "trace",
+                { ...patterns, methodPattern: " " },
+                /methodPattern/,
+            ],
+            ...[4, 121, 5.5, "5", NaN, Infinity].map((timeoutSeconds) => [
+                pods[0].key,
+                "watch",
+                { ...patterns, timeoutSeconds },
+                /timeoutSeconds/,
+            ]),
+            ...[0, 11, 1.5, "2"].map((maxResults) => [
+                pods[0].key,
+                "trace",
+                { ...patterns, maxResults },
+                /maxResults/,
+            ]),
+        ];
+        for (const [key, tool, args, error] of invalid)
+            assert.throws(() => store.startTask(key, tool, args), error);
+        assert.throws(
+            () => store.setPolicy("missing", "orders", "all"),
+            /unknown context/,
+        );
+        assert.throws(
+            () => store.setPolicy("production", "orders", "invalid"),
+            /unsupported policy/,
+        );
+        assert.throws(() => store.cancelTask("missing"), /unknown task/);
+        assert.deepEqual(plain(store.state), before);
+        for (const [tool, field] of [
+            ["jvm", "jvm"],
+            ["memory", "memory"],
+            ["thread", "threads"],
+            ["trace", "trace"],
+            ["watch", "samples"],
+            ["ognl", "value"],
+            ["sc", "classes"],
+            ["profiler", "frames"],
+        ]) {
+            const task = store.startTask(pods[0].key, tool, {
+                ...patterns,
+                expression: 'throw new Error("never evaluate")',
+            });
+            assert.equal(typeof task, "object");
+            assert.equal(task.result, null);
+            assert.equal(task.finishedAt, null);
+            const duration = ["trace", "watch"].includes(tool)
+                ? 12000
+                : tool === "profiler"
+                  ? 5000
+                  : 3000;
+            advance(duration - 1);
+            assert.equal(task.status, "running");
+            advance(1);
+            assert.equal(task.status, "succeeded");
+            assert.equal(task.finishedAt, task.createdAt + duration);
+            assert.equal(task.result.simulated, true);
+            assert.equal(task.result.tool, tool);
+            assert.equal(typeof task.result.summary, "string");
+            assert.ok(task.result.rows.length > 0);
+            assert.ok(task.result[field]);
+            const finished = plain(task);
+            store.cancelTask(task.id);
+            assert.deepEqual(plain(task), finished);
+        }
+        const capped = store.startTask(pods[0].key, "watch", {
+            ...patterns,
+            maxResults: 2,
+            timeoutSeconds: 120,
+        });
+        advance(7999);
+        assert.equal(capped.status, "running");
+        advance(1);
+        assert.equal(capped.status, "succeeded");
+        assert.equal(capped.result.samples.length, 2);
+        const timed = store.startTask(pods[0].key, "trace", {
+            ...patterns,
+            timeoutSeconds: 5,
+        });
+        advance(5000);
+        assert.equal(timed.status, "succeeded");
+        assert.equal(timed.finishedAt, timed.deadline);
+    },
+);
+
+check(
+    "retention caps preserve every running task and bound event history",
+    () => {
+        const { store, advance } = fixture();
+        const pod = store.listPods("production", "orders")[0];
+        const runningSeed = store.state.tasks.find(
+            (task) => task.status === "running",
+        );
+        for (let index = 0; index < 120; index++) {
+            const task = store.startTask(pod.key, "jvm");
+            store.cancelTask(task.id);
+        }
+        assert.equal(store.state.tasks.length, 100);
+        assert.ok(store.state.tasks.includes(runningSeed));
+        for (let index = 0; index < 99; index++)
+            store.startTask(pod.key, "jvm");
+        assert.equal(store.state.tasks.length, 100);
+        assert.ok(store.state.tasks.every((task) => task.status === "running"));
+        const ids = plain(store.state.tasks.map((task) => task.id));
+        assert.throws(() => store.startTask(pod.key, "jvm"), /task limit/);
+        assert.deepEqual(plain(store.state.tasks.map((task) => task.id)), ids);
+        assert.equal(store.state.events.length, 100);
+        assert.equal(
+            new Set(store.state.events.map((event) => event.id)).size,
+            100,
+        );
+        for (const event of store.state.events) {
+            assert.deepEqual(
+                Object.keys(event).sort(),
+                [
+                    "id",
+                    "at",
+                    "kind",
+                    "title",
+                    "detail",
+                    "targetKey",
+                    "environment",
+                    "app",
+                ].sort(),
+            );
+            assert.ok(["info", "success", "warning"].includes(event.kind));
+        }
+        advance(3000);
+        assert.equal(runningSeed.status, "running");
+        store.startTask(pod.key, "jvm");
+        assert.equal(store.state.tasks.length, 100);
+        assert.ok(store.state.tasks.includes(runningSeed));
+        assert.equal(store.state.events.length, 100);
+    },
+);
+
+console.log(
+    `Offline domain model: ${checks.length} focused checks passed (VM, fake clock, no I/O or timers).`,
+);

@@ -62,11 +62,12 @@ jobs:
         run: cargo test --locked --features test-fixtures --manifest-path connector/Cargo.toml
       - name: Run gateway and connector integration tests
         run: uv run --no-sync python -B -m unittest discover -s tests -v
-      - name: Verify static preview matches the application UI
+      - name: Verify offline design prototype
         run: |
           uv run --no-sync python -B scripts/build_preview.py
           git diff --exit-code -- docs/preview
           node --check workbench/static/app.js
-          node --check docs/preview/mock.js
+          node --check ui-prototype/app.js
+          node --check ui-prototype/model.js
           node --check docs/preview/app.js
           node scripts/check_preview.mjs

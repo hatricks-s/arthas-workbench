@@ -32,19 +32,21 @@ cargo test --locked --features test-fixtures --manifest-path "$project/connector
 $env:WORKBENCH_LONG_TESTS = '1'
 & "$project/.venv/Scripts/python.exe" -B -m unittest discover -s "$project/tests" -v
 node --check "$project/workbench/static/app.js"
-node --check "$project/docs/preview/mock.js"
+node --check "$project/ui-prototype/app.js"
+node --check "$project/ui-prototype/model.js"
+node "$project/scripts/check_preview.mjs"
 ```
 
 The native test feature builds test helpers; they are never distributed as product executables. Python real-connector integration and the full-stack demo currently use Windows fixtures and expect the binary under `.build/connector/debug`. On other platforms those tests are skipped; a green unit suite does not prove platform acceptance.
 
-After changing the application UI, regenerate its static review snapshot:
+The offline design prototype is maintained in `ui-prototype/`, separately from the runnable gateway UI in `workbench/static/`. After changing the design prototype, regenerate its static review snapshot:
 
 ```powershell
 & "$project/.venv/Scripts/python.exe" -B "$project/scripts/build_preview.py"
 git diff -- docs/preview
 ```
 
-`docs/preview/mock.js` is the only handwritten preview adapter. Never put real network calls or credentials in it. `index.html`, `app.js` and `style.css` in that directory are generated from the application UI.
+`ui-prototype/model.js` is the deterministic offline domain simulator. Keep it free of networking, storage, DOM and timers. `docs/preview/` is generated entirely from `ui-prototype/`, including the locally served font and its license. Never put real credentials, process access or cluster calls in the design preview. Preserve its simulation notice and document which interactions require future backend work.
 
 ## Pull request expectations
 

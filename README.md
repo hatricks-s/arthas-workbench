@@ -14,27 +14,22 @@
 
 [Open the interactive prototype →](https://yy568821795-max.github.io/arthas-workbench/preview/)
 
-Explore the redesigned connections workspace, session history, MCP client setup, and resource/connector roadmap. Search local/Kubernetes targets, verify MCP capabilities, scan and confirm Attach, run diagnostic forms, cancel tasks, and switch themes. The layout also works on phones. All data and actions in the static preview are simulated. You can open `docs/preview/index.html` directly after cloning; no runtime or credentials are needed.
+The new **v0.2 design prototype** organizes diagnostics by environment → application → exact Pod/JVM. Explore production, staging and development deployments of the same application; group replicas by worker node; launch parallel tasks; inspect structured results; and simulate an independent reconnect or same-name Pod replacement. A single light theme keeps target identity, connection state and results in focus.
 
-The UI distinguishes an endpoint being reachable from an explicit MCP verification. It offers no interactive Telnet terminal; new local Attach defaults to `telnetPort=-1`. OGNL, Profiler, hot update and automated resource delivery are visible but clearly marked as not yet implemented. See [interface behavior and design](docs/UI.md).
+**This is an offline design prototype, separate from the runnable gateway UI.** Per-Pod supervision, environment discovery, persistent tasks, OGNL and Profiler are simulated design interactions, not newly implemented backend features. Every metric is fabricated. Refresh resets the scenario; closing the page ends the simulation. No process, cluster or real MCP endpoint is contacted. Open `docs/preview/index.html` directly after cloning, or use the hosted preview. See [design behavior and capability boundaries](docs/UI.md).
 
-### Dark
+![Application diagnostic workspace — simulated environments, Pods and Trace results](docs/images/prototype-workspace.png)
 
-![Arthas Workbench dark theme — simulated diagnostic targets](docs/images/prototype-dark.png)
+[View the mobile workspace](docs/images/prototype-mobile-v2.png)
 
-### Light
-
-![Arthas Workbench light theme — simulated diagnostic targets](docs/images/prototype-light.png)
-
-[View the mobile diagnostic screen](docs/images/prototype-mobile.png)
-
-[Send UI feedback](https://github.com/yy568821795-max/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the theme, viewport and steps; remove credentials and private target names from screenshots.
+[Send UI feedback](https://github.com/yy568821795-max/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the environment, page, viewport and steps; remove credentials and private target names from screenshots.
 
 ## What works today
 
 | Capability | Prototype status |
 | --- | --- |
-| Web workspace | Responsive dark/light workspace, target search/filters, MCP verification, diagnostic forms, cancellation, session history, MCP setup templates |
+| Design preview | Single-theme environment/application workspace, multi-Pod task and lifecycle simulations; separate from runtime |
+| Runtime Web UI | Existing target search, explicit MCP verification, diagnostic forms, cancellation and in-memory session history |
 | Local Java | Outbound connector, loopback Arthas forwarding, `jps` discovery, optional explicit Attach |
 | Kubernetes | Configured kubeconfig/namespace/Pod → owned `kubectl port-forward` → existing Arthas |
 | MCP endpoint | Streamable HTTP at `/mcp`; per-request authentication and explicit instance selection |
@@ -60,7 +55,7 @@ flowchart LR
     Cluster -->|"kubectl port-forward"| Pod["Pod / Arthas"]
 ```
 
-**Proposed end-user experience:** download once → launch → browser opens → local JVMs appear → select a process. Team sharing becomes an optional sign-in/pairing step. This launcher flow is a design direction, **not an implemented installer**. See [the onboarding design](docs/ONBOARDING.md) for the distinction between personal mode and a shared team server.
+**Proposed end-user experience:** open the team's shared workbench → select an environment and application → diagnose a specific JVM. Kubernetes users need only a browser and authorization. For local Java, launch the local helper once and pair it with the team server; the helper discovers processes and obtains centrally managed Arthas resources. Pairing, packaging and resource delivery are design directions, **not implemented installers or services**. See [the onboarding design](docs/ONBOARDING.md).
 
 ## Developer quick start
 
@@ -141,8 +136,8 @@ cargo test --locked --features test-fixtures --manifest-path "$project/connector
 
 这是一个专注 Arthas 的独立开源原型：把 Web 工作台、MCP 服务和本机/K8s 执行能力统一起来。
 
-- **先审查界面：** [在线交互原型](https://yy568821795-max.github.io/arthas-workbench/preview/)可以直接打开，所有数据与操作均为模拟。上方有明暗主题截图。
-- **本机能力的原理：** 浏览器不能直接扫描本机进程，必须由本机程序完成。我们计划把这个程序做成用户双击一次即可启动的工具，自动打开页面并发现 Java 进程。团队共享作为可选登录步骤。
+- **先审查界面：** [新版交互原型](https://yy568821795-max.github.io/arthas-workbench/preview/)采用单一浅色主题，包含多环境同名应用、多 Pod 状态、并行诊断及断线／重建演示。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
+- **本机能力的原理：** 主入口是团队共享服务器。K8s 用户只需浏览器；诊断本机 Java 时，由用户运行一次本机助手完成配对、扫描、资源准备和连接。该简化接入流程仍待实现，浏览器自身不会扫描进程。
 - **当前状态：** 两条连接链路和一组 MCP 工具已实现；自动配对、一键启动、K8s 上传与 Attach、Perl 文件传输、MySQL 尚未实现。开发配置流程不代表最终产品体验。
 - **反馈方式：** [提交界面建议](https://github.com/yy568821795-max/arthas-workbench/issues/new?template=ui-feedback.yml)，说明页面、操作步骤、屏幕尺寸与期望效果即可。
 

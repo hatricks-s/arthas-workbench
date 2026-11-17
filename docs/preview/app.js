@@ -1,586 +1,896 @@
-'use strict';
-
-const $ = id => document.getElementById(id);
-const all = selector => [...document.querySelectorAll(selector)];
-const node = (tag, text = '', className = '') => {
-  const element = document.createElement(tag);
-  element.textContent = text;
-  if (className) element.className = className;
-  return element;
-};
-const icon = name => {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  const use = document.createElementNS(svg.namespaceURI, 'use');
-  svg.setAttribute('class', 'icon');
-  svg.setAttribute('aria-hidden', 'true');
-  use.setAttribute('href', `#i-${name}`);
-  svg.append(use);
-  return svg;
-};
-const labels = {ready: '端点可达', unknown: '待验证', unavailable: '端点不可达', offline: '节点离线'};
-const jobLabels = {running: '执行中', succeeded: '已完成', failed: '执行失败', cancelled: '已取消'};
-const pageLabels = {connections: '连接与诊断', history: '诊断记录', mcp: 'MCP 接入', resources: '资源与助手'};
-const tools = {
-  jvm: {name: 'JVM 概览', help: '读取 JVM 运行环境，不需要输入参数。'},
-  memory: {name: 'Memory', help: '查看当前内存信息，不会触发堆转储。'},
-  thread: {name: 'Thread', help: '查看繁忙线程；可指定返回的线程数量。'},
-  trace: {name: 'Trace', help: '跟踪方法内部调用，等待目标方法实际执行。'},
-  watch: {name: 'Watch', help: '观察一次调用的入参、返回值与异常。'},
-  version: {name: 'Version', help: '读取当前目标的 Arthas 版本。'}
-};
-let token = '', state = null, selected = null, selectedTool = 'jvm', filter = 'all';
-let page = 'connections', jobId = null, submitting = false, epoch = 0, refreshing = false;
-let timer = null, pollTimer = null, processes = [], pendingAttach = null, history = [];
-const verified = new Map();
-const results = new Map();
-const busy = () => submitting || !!jobId;
-const current = () => state?.instances.find(item => item.id === selected);
-const connectorFor = item => state?.nodes.find(itemNode => itemNode.id === item?.node_id);
-const statusText = item => item.status === 'ready' && verified.has(item.id) ? 'MCP 已验证' : labels[item.status] || item.status;
-
-function notice(message) {
-  $('notice').textContent = message;
-  $('notice').hidden = false;
-  clearTimeout(notice.timer);
-  notice.timer = setTimeout(() => { $('notice').hidden = true; }, 6500);
-}
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...options.headers},
-    cache: 'no-store'
-  });
-  let data;
-  try { data = await response.json(); }
-  catch { throw new Error(`服务返回了无法识别的响应 (${response.status})`); }
-  if (!response.ok) {
-    const error = new Error(data.error || `请求失败 (${response.status})`);
-    error.status = response.status;
-    throw error;
-  }
-  return data;
-}
-function showPage(next) {
-  if (!state || !pageLabels[next]) return;
-  page = next;
-  for (const [key, label] of Object.entries(pageLabels)) {
-    $(`page-${key}`).hidden = key !== page;
-    if (key === page) {
-      $('page-label').textContent = label;
-      document.title = `Arthas Workbench · ${label}`;
-    }
-  }
-  all('#navigation [data-page]').forEach(button => {
-    const active = button.dataset.page === page;
-    button.classList.toggle('active', active);
-    if (active) button.setAttribute('aria-current', 'page');
-    else button.removeAttribute('aria-current');
-  });
-  if (page === 'history') renderHistory();
-  window.scrollTo(0, 0);
-}
-all('[data-page]').forEach(button => { button.onclick = () => showPage(button.dataset.page); });
-
-function setTab(name, focus = false) {
-  for (const tab of ['diagnostics', 'connection']) {
-    const active = tab === name;
-    const button = $(`tab-${tab}`);
-    button.setAttribute('aria-selected', String(active));
-    button.tabIndex = active ? 0 : -1;
-    $(tab === 'diagnostics' ? 'diagnostic-panel' : 'connection-panel').hidden = !active;
-    if (active && focus) button.focus();
-  }
-}
-for (const name of ['diagnostics', 'connection']) {
-  $(`tab-${name}`).onclick = () => setTab(name);
-  $(`tab-${name}`).onkeydown = event => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const next = event.key === 'Home' ? 'diagnostics' : event.key === 'End' ? 'connection' : name === 'diagnostics' ? 'connection' : 'diagnostics';
-    setTab(next, true);
+/* Design prototype only. No fetch, credentials, real JVMs or Kubernetes access. */
+(() => {
+  "use strict";
+  const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  const escape = (value) =>
+    String(value ?? "").replace(
+      /[&<>"']/g,
+      (character) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[character],
+    );
+  const icon = (name, small = false) =>
+    `<svg class="icon${small ? " small" : ""}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+  const tools = {
+    trace: ["方法追踪", "拆解一次方法调用，定位耗时发生在哪里。", "layers"],
+    watch: ["方法观测", "观察方法执行时的入参、返回值与异常。", "search"],
+    thread: ["线程分析", "查看活跃线程及调用栈，找到阻塞与热点。", "activity"],
+    jvm: ["JVM 信息", "查看当前 Java 进程的运行信息。", "server"],
+    memory: ["内存概览", "查看堆、元空间与直接内存的使用情况。", "grid"],
+    ognl: ["表达式求值", "展示结构化求值结果，原型不会执行表达式。", "code"],
+    sc: ["类检查", "查看已加载的类、类加载器与代码来源。", "file"],
+    profiler: ["性能采样", "按采样占比查看调用热点。", "clock"],
   };
-}
-
-function renderTargets() {
-  const list = $('target-list');
-  const focusedTarget = list.contains(document.activeElement) ? document.activeElement.dataset.target : null;
-  const search = $('target-search').value.trim().toLocaleLowerCase();
-  const items = state.instances.filter(item => (filter === 'all' || item.kind === filter) &&
-    `${item.name} ${item.id}`.toLocaleLowerCase().includes(search));
-  list.replaceChildren();
-  $('target-count').textContent = String(state.instances.length);
-  if (!items.length) {
-    list.append(node('p', state.instances.length ? '没有匹配的实例，试试其他关键词或连接类型。' : '暂无已登记实例，请先接入执行节点。', 'list-empty hint'));
-  }
-  for (const item of items) {
-    const button = node('button', '', 'target');
-    button.dataset.target = item.id;
-    button.setAttribute('aria-pressed', String(item.id === selected));
-    button.setAttribute('aria-label', `${item.name}，${item.kind === 'local' ? '本机' : 'K8s'}，${statusText(item)}`);
-    const line = node('span', '', 'target-line');
-    line.append(icon(item.kind === 'k8s' ? 'cluster' : 'monitor'), node('strong', item.name));
-    const bottom = node('span', '', 'target-bottom');
-    bottom.append(node('span', item.kind === 'k8s' ? 'KUBERNETES' : 'LOCAL JVM', 'target-kind-label'), node('span', statusText(item), `status ${item.status}`));
-    button.append(line, node('small', item.id), bottom);
-    button.onclick = () => selectTarget(item.id);
-    list.append(button);
-    if (focusedTarget === item.id) button.focus({preventScroll: true});
-  }
-}
-function selectTarget(id) {
-  if (busy() && id !== selected) {
-    notice('当前操作仍在进行。完成或取消后可切换目标。');
-    return;
-  }
-  if (id !== selected) {
-    selected = id;
-    processes = [];
-    $('processes').hidden = true;
-    $('pid').replaceChildren();
-    pendingAttach = null;
-    setTab('diagnostics');
-  }
-  render();
-}
-function render() {
-  if (!state) return;
-  $('account').textContent = state.user;
-  $('account').title = state.user;
-  $('mcp-url').value = state.mcp_url;
-  $('mcp-config').textContent = JSON.stringify({mcpServers: {'arthas-workbench': {
-    type: 'http', url: state.mcp_url, headers: {Authorization: 'Bearer <YOUR_USER_TOKEN>'}
-  }}}, null, 2);
-  const online = state.nodes.filter(item => item.online).length;
-  $('connection-health').replaceChildren(node('span', '', 'small-dot'), document.createTextNode(online ? `${online} 个节点在线` : '等待节点接入'));
-  $('connection-health').classList.toggle('online', online > 0);
-  $('step-node').textContent = online ? `${online} 个执行节点在线` : '等待助手接入';
-  $('step-target').textContent = selected ? '已选择目标实例' : '扫描或选择实例';
-  $('step-probe').textContent = verified.has(selected) ? '本页 MCP 验证通过' : '检查 HTTP / MCP';
-  renderTargets();
-  $('node-list').replaceChildren();
-  for (const item of state.nodes) {
-    const row = node('div', '', 'node');
-    row.append(node('span', item.id), node('span', item.online ? '在线' : '离线', `status ${item.online ? 'ready' : 'offline'}`));
-    $('node-list').append(row);
-  }
-  if (!state.nodes.length) $('node-list').append(node('p', '尚未授权任何节点。', 'hint'));
-  const item = current();
-  $('no-selection').hidden = !!item;
-  $('selection').hidden = !item;
-  $('refresh').disabled = refreshing;
-  $('clear-history').disabled = busy() || !history.length;
-  if (!item) return;
-  $('target-icon').replaceChildren(icon(item.kind === 'k8s' ? 'cluster' : 'monitor'));
-  $('target-kind').textContent = item.kind === 'k8s' ? 'KUBERNETES / JAVA TARGET' : 'LOCAL CONNECTOR / JAVA TARGET';
-  $('target-name').textContent = item.name;
-  $('target-id').textContent = item.id;
-  $('target-status').textContent = statusText(item);
-  $('target-status').className = `status ${item.status}`;
-  $('target-detail').textContent = item.detail || '验证连接后，选择诊断工具开始调用。';
-  const connector = connectorFor(item);
-  const canDiagnose = state.scopes.includes('diagnose');
-  const canScan = connector?.online && connector.capabilities.includes('scan_java');
-  const canAttach = connector?.online && connector.capabilities.includes('attach_local') && state.scopes.includes('attach');
-  $('probe').disabled = busy() || !connector?.online || !canDiagnose;
-  $('probe').classList.toggle('primary', !verified.has(item.id));
-  $('probe').title = !canDiagnose ? '当前账户没有诊断权限' : !connector?.online ? '请先连接执行节点' : '握手并查询目标的 MCP 工具';
-  $('scan').hidden = item.kind !== 'local';
-  $('scan').disabled = busy() || !canScan;
-  $('scan').title = canScan ? '扫描此助手可访问的 JVM' : '助手未在线或尚未开放扫描能力';
-  $('attach').disabled = busy() || !processes.length || !canAttach;
-  $('pid').disabled = busy() || !processes.length;
-  $('attach-hint').textContent = !canAttach ? '当前账户或助手尚未开放 Attach 权限。' : 'Attach 前会再次核对 PID 与进程身份。';
-  $('fact-id').textContent = item.id;
-  $('fact-node').textContent = `${item.node_id} · ${connector?.online ? '在线' : '离线'}`;
-  $('fact-kind').textContent = item.kind === 'k8s' ? 'K8s 执行节点 → Pod 端口转发' : '本机助手 → JVM HTTP / MCP';
-  const check = verified.get(item.id);
-  $('fact-verified').textContent = check ? `本页验证通过 · ${check.time}` : '尚未在本页验证';
-  renderTool();
-  renderResult();
-}
-
-function renderTool() {
-  const item = current();
-  const connector = connectorFor(item);
-  const check = verified.get(item?.id);
-  const long = ['trace', 'watch'].includes(selectedTool);
-  all('[data-tool]').forEach(button => {
-    button.setAttribute('aria-pressed', String(button.dataset.tool === selectedTool));
-    button.disabled = busy();
-  });
-  $('trace-fields').hidden = !long;
-  $('thread-fields').hidden = selectedTool !== 'thread';
-  $('watch-expression').hidden = selectedTool !== 'watch';
-  // Inactive inputs must not take part in native form validation.
-  for (const id of ['class-pattern', 'method-pattern', 'timeout']) $(id).disabled = !long || busy();
-  $('class-pattern').required = long;
-  $('top-n').disabled = selectedTool !== 'thread' || busy();
-  $('tool-help').textContent = tools[selectedTool].help;
-  const reason = !item ? '先选择一个目标实例。' : !connector?.online ? '执行节点已离线，请等待助手重新连接。' :
-    !state.scopes.includes('diagnose') ? '当前账户没有诊断权限。' :
-    !check ? '先点击“验证连接”，确认目标的 MCP 能力。' :
-    !check.tools.includes(selectedTool) ? '目标未提供这个诊断工具。' :
-    long && !check.tasks ? '目标没有声明任务能力，暂不能运行 Trace / Watch。' : '';
-  $('run').disabled = busy() || !!reason;
-  $('run-disabled-reason').hidden = !reason;
-  $('run-disabled-reason').textContent = reason;
-  $('run-label').textContent = busy() ? '处理中…' : '运行诊断';
-}
-all('[data-tool]').forEach(button => {
-  button.onclick = () => { if (!busy()) { selectedTool = button.dataset.tool; renderTool(); } };
-});
-all('[data-filter]').forEach(button => {
-  button.onclick = () => {
-    filter = button.dataset.filter;
-    all('[data-filter]').forEach(other => other.setAttribute('aria-pressed', String(other.dataset.filter === filter)));
-    renderTargets();
+  const labels = {
+    orders: "订单服务",
+    payments: "支付服务",
+    inventory: "库存服务",
+    gateway: "API 网关",
   };
-});
-$('target-search').oninput = () => { if (state) renderTargets(); };
-
-function formatResult(value) {
-  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-}
-function renderResult() {
-  const record = results.get(selected);
-  $('result-empty').hidden = !!record;
-  $('result').hidden = !record;
-  $('result').textContent = record?.text || '';
-  $('job-state').textContent = record ? jobLabels[record.status] || record.status : '尚未执行';
-  $('result-dot').className = `result-dot ${record?.status || ''}`;
-  $('copy-result').disabled = !record || record.status === 'running';
-  $('cancel').hidden = !jobId || !record || record.status !== 'running';
-  $('result-context').textContent = record ? `${record.label} · ${record.time}${record.simulated ? ' · 模拟结果' : ''}` : '等待首次调用';
-}
-function renderHistory() {
-  $('history-count').textContent = String(history.length);
-  const list = $('history-list');
-  const expanded = new Set([...list.querySelectorAll('details[open]')].map(element => element.dataset.job));
-  list.replaceChildren();
-  $('clear-history').disabled = busy() || !history.length;
-  if (!history.length) {
-    const empty = node('div', '', 'panel empty');
-    empty.append(icon('clock'), node('h2', '还没有诊断记录'), node('p', '验证连接或运行一次诊断，操作与结果就会出现在这里。'));
-    list.append(empty);
-    return;
+  const channelNames = {
+    ready: ["已连接", "green"],
+    reconnecting: ["重连中", "amber"],
+    discovered: ["待接入", "gray"],
+    retired: ["已替换", "red"],
+  };
+  const taskNames = {
+    running: ["进行中", "blue"],
+    succeeded: ["已完成", "green"],
+    cancelled: ["已取消", "gray"],
+    interrupted: ["已中断", "red"],
+  };
+  const store = window.WorkbenchDemo.createStore();
+  const state = store.state;
+  let page = "workspace",
+    environment = "production",
+    app = "orders",
+    tab = "instances",
+    tool = "trace";
+  let selected = store.listPods(environment, app)[0].key;
+  let checked = new Set(),
+    selectionByContext = new Map(),
+    taskByTool = new Map();
+  let taskDetail = null,
+    dialogTargets = [],
+    toastTimer,
+    lastSignature = "",
+    pendingConnection = null;
+  const context = () =>
+    page === "local" ? ["local", "local"] : [environment, app];
+  const currentPods = () => store.listPods(...context());
+  const podFor = (key) => state.pods.find((pod) => pod.key === key);
+  const selectedPod = () => podFor(selected);
+  const environmentName = (id) =>
+    state.environments.find((item) => item.id === id)?.name || "本机环境";
+  const appName = (id) =>
+    state.apps.find((item) => item.id === id)?.name || "本机 Java 进程";
+  const date = (value) =>
+    new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(new Date(value));
+  const status = (value, kind = "channel") => {
+    const [label, color] = (kind === "task" ? taskNames : channelNames)[
+      value
+    ] || [value, "gray"];
+    return `<span class="status ${color}">${label}</span>`;
+  };
+  const appTasks = () => {
+    const [env, application] = context();
+    return state.tasks.filter(
+      (task) =>
+        task.target.environment === env && task.target.app === application,
+    );
+  };
+  const visiblePods = () =>
+    currentPods().filter((pod) => {
+      const query = $("#pod-search").value.trim().toLowerCase();
+      return (
+        (!query ||
+          `${pod.name} ${pod.node} ${pod.pid}`.toLowerCase().includes(query)) &&
+        ($("#channel-filter").value === "all" ||
+          pod.channel === $("#channel-filter").value)
+      );
+    });
+  function toast(message) {
+    clearTimeout(toastTimer);
+    $("#toast").textContent = message;
+    $("#toast").hidden = false;
+    toastTimer = setTimeout(() => {
+      $("#toast").hidden = true;
+    }, 4500);
   }
-  for (const record of [...history].reverse()) {
-    const entry = node('details', '', 'panel history-entry');
-    entry.dataset.job = record.id;
-    entry.open = expanded.has(record.id);
-    const summary = node('summary');
-    const description = node('span', '', 'history-label');
-    description.append(node('strong', record.label), node('small', record.target));
-    summary.append(description, node('span', record.time, 'history-time'), node('span', jobLabels[record.status] || record.status, `status ${record.status}`));
-    const output = node('pre', record.text);
-    output.tabIndex = 0;
-    entry.append(summary, output);
-    list.append(entry);
+  const narrowNavigation = matchMedia("(max-width: 820px)");
+  function syncNavigation() {
+    const open = $("#sidebar").classList.contains("open");
+    $("#sidebar").inert = narrowNavigation.matches && !open;
+    $(".shell").inert = narrowNavigation.matches && open;
   }
-}
-$('clear-history').onclick = () => {
-  if (busy()) return;
-  history = [];
-  results.clear();
-  renderHistory();
-  renderResult();
-  notice('本页记录已清空');
-};
-
-async function refresh() {
-  if (!token || refreshing) return;
-  const version = epoch;
-  refreshing = true;
-  $('refresh').disabled = true;
-  try {
-    const value = await api('/api/state');
-    if (version !== epoch) return;
-    const changed = JSON.stringify(value) !== JSON.stringify(state);
-    state = value;
-    for (const id of verified.keys()) {
-      const item = state.instances.find(candidate => candidate.id === id);
-      if (!item || item.status !== 'ready' || !connectorFor(item)?.online) verified.delete(id);
-    }
-    if (!current() && !busy()) selected = state.instances[0]?.id || null;
-    const recovering = $('sync-state').textContent === '同步失败';
-    $('sync-state').textContent = '刚刚同步';
-    if (changed || recovering) render();
-  } catch (error) {
-    if (version !== epoch) return;
-    verified.clear();
-    $('sync-state').textContent = '同步失败';
-    if (error.status === 401) { logout(); notice('登录已失效，请重新输入用户令牌。'); }
-    else {
-      render();
-      $('connection-health').replaceChildren(node('span', '', 'small-dot'), document.createTextNode('同步中断'));
-      $('connection-health').classList.remove('online');
-      notice(`连接状态暂时无法更新：${error.message}`);
-    }
-  } finally {
-    if (version === epoch) { refreshing = false; $('refresh').disabled = false; }
+  function closeNavigation() {
+    const hadFocus = $("#sidebar").contains(document.activeElement);
+    $("#sidebar").classList.remove("open");
+    $("#nav-scrim").hidden = true;
+    $("#mobile-menu").setAttribute("aria-expanded", "false");
+    syncNavigation();
+    if (hadFocus && narrowNavigation.matches) $("#mobile-menu").focus();
   }
-}
-$('refresh').onclick = refresh;
-$('login-form').onsubmit = async event => {
-  event.preventDefault();
-  if ($('login-submit').disabled) return;
-  $('login-submit').disabled = true;
-  token = $('token').value.trim();
-  const version = epoch;
-  try {
-    const value = await api('/api/state');
-    if (version !== epoch) return;
-    state = value;
-    epoch++;
-    selected = state.instances.find(item => item.status === 'ready')?.id || state.instances[0]?.id || null;
-    $('token').value = '';
-    $('login').hidden = true;
-    $('workspace').hidden = false;
-    $('navigation').hidden = false;
-    $('logout').hidden = false;
-    $('sync-state').textContent = '刚刚同步';
-    $('mcp-preview-note').hidden = !window.WORKBENCH_PREVIEW;
-    showPage('connections');
+  narrowNavigation.addEventListener("change", () => {
+    closeNavigation();
+    syncNavigation();
+  });
+  function resetSelection() {
+    const key = context().join("/");
+    const remembered = selectionByContext.get(key);
+    selected = currentPods().some((pod) => pod.key === remembered)
+      ? remembered
+      : currentPods()[0]?.key;
+    checked.clear();
+    $("#pod-search").value = "";
+    $("#channel-filter").value = "all";
+  }
+  function showPage(next) {
+    if (page === "workspace" || page === "local")
+      selectionByContext.set(context().join("/"), selected);
+    page = next;
+    if (
+      (page === "workspace" || page === "local") &&
+      !currentPods().some((pod) => pod.key === selected)
+    )
+      resetSelection();
+    if (page === "workspace" || page === "local") tab = "instances";
+    closeNavigation();
     render();
-    clearInterval(timer);
-    timer = setInterval(refresh, 4000);
-  } catch (error) { token = ''; notice(error.message); }
-  finally { $('login-submit').disabled = false; }
-};
-function logout() {
-  const pending = busy();
-  epoch++;
-  token = ''; state = null; selected = null; jobId = null; submitting = false; refreshing = false;
-  processes = []; history = []; pendingAttach = null; selectedTool = 'jvm'; filter = 'all';
-  verified.clear(); results.clear();
-  clearInterval(timer); clearTimeout(pollTimer);
-  $('login').hidden = false; $('workspace').hidden = true; $('navigation').hidden = true; $('logout').hidden = true;
-  $('result').textContent = ''; $('history-list').replaceChildren(); $('history-count').textContent = '0'; $('pid').replaceChildren(); $('processes').hidden = true;
-  for (const id of ['fact-id', 'fact-node', 'fact-kind', 'fact-verified', 'target-kind', 'target-status', 'result-context']) $(id).textContent = '';
-  $('target-search').value = ''; $('class-pattern').value = ''; $('method-pattern').value = '*'; $('timeout').value = '30'; $('top-n').value = '5';
-  $('mcp-url').value = ''; $('mcp-config').textContent = ''; $('account').textContent = '未登录';
-  $('target-list').replaceChildren(); $('node-list').replaceChildren(); $('attach-target').textContent = '';
-  $('target-name').textContent = ''; $('target-id').textContent = ''; $('target-detail').textContent = '';
-  $('guide-dialog').close(); $('attach-dialog').close();
-  all('[data-filter]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.filter === 'all')));
-  $('connection-health').replaceChildren(node('span', '', 'small-dot'), document.createTextNode('等待登录'));
-  $('connection-health').classList.remove('online');
-  $('token').focus();
-  if (pending) notice('已退出。服务端已提交的操作可能仍在执行，退出不会停止目标 JVM。');
-}
-$('logout').onclick = logout;
-$('theme').onclick = () => {
-  const dark = document.documentElement.dataset.theme !== 'dark';
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  $('theme').setAttribute('aria-label', `切换到${dark ? '浅色' : '深色'}主题`);
-  document.querySelector('meta[name="theme-color"]').content = dark ? '#141719' : '#f5f6f3';
-};
-async function copyText(text, element, message) {
-  try { await navigator.clipboard.writeText(text); notice(message); }
-  catch {
-    if (typeof element.select === 'function') { element.focus(); element.select(); }
-    else {
-      const range = document.createRange(); range.selectNodeContents(element);
-      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-    }
-    notice('浏览器未允许自动复制，已选中内容，可手动复制。');
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
-}
-$('copy').onclick = () => copyText($('mcp-url').value, $('mcp-url'), 'MCP 地址已复制');
-$('copy-config').onclick = () => copyText($('mcp-config').textContent, $('mcp-config'), '配置模板已复制，请替换令牌占位符');
-$('copy-result').onclick = () => copyText($('result').textContent, $('result'), '执行结果已复制');
-
-async function start(operation, onResult) {
-  if (busy() || !current()) return;
-  const version = epoch;
-  const target = selected;
-  const actionLabels = {probe: '验证 MCP 连接', scan_java: '扫描 Java 进程', attach_local: 'Attach 并连接'};
-  const record = {
-    id: `pending-${Date.now()}`, target, label: actionLabels[operation.action] || tools[operation.tool]?.name || '诊断',
-    status: 'running', time: new Date().toLocaleTimeString('zh-CN', {hour12: false}),
-    text: '正在提交请求…', simulated: !!window.WORKBENCH_PREVIEW
-  };
-  submitting = true;
-  results.set(target, record);
-  setTab('diagnostics');
-  render();
-  try {
-    const job = await api('/api/jobs', {method: 'POST', body: JSON.stringify(operation)});
-    if (version !== epoch) return;
-    jobId = job.id;
-    submitting = false;
-    record.id = job.id;
-    record.text = ['trace', 'watch'].includes(operation.tool) ? '任务已提交，等待目标方法实际执行…\n可取消等待；不会自动重放调用。' : '请求已提交，正在等待目标返回…';
-    history.push(record);
-    if (history.length > 50) history.shift();
-    renderHistory(); render();
-    let pollErrors = 0;
-    const poll = async () => {
+  function renderNavigation() {
+    $$("[data-page]").forEach((button) => {
+      const active = button.dataset.page === page;
+      button.classList.toggle("active", active);
+      if (active) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    });
+    $("#app-navigation").hidden = !["workspace"].includes(page);
+    $("#environment").value = environment;
+    $(".environment-control").dataset.env = environment;
+    const query = $("#app-search").value.toLowerCase().trim();
+    $("#app-list").innerHTML =
+      state.apps
+        .filter((item) =>
+          `${item.name} ${item.description}`.toLowerCase().includes(query),
+        )
+        .map(
+          (item) =>
+            `<button class="app-link${item.id === app ? " active" : ""}" data-app="${item.id}"${item.id === app ? ' aria-current="true"' : ""}><span class="app-indicator"></span><span>${escape(item.name)}</span><span class="app-quantity">${store.listPods(environment, item.id).length}</span></button>`,
+        )
+        .join("") || '<div class="empty-state compact">没有匹配的应用</div>';
+    const count = state.tasks.filter(
+      (task) => task.status === "running",
+    ).length;
+    $("#global-task-count").textContent = count;
+    $("#breadcrumb-context").textContent =
+      page === "local"
+        ? "我的电脑"
+        : page === "workspace"
+          ? environmentName(environment)
+          : "团队工作空间";
+    $("#breadcrumb-page").textContent = {
+      workspace: labels[app],
+      local: "Java 进程",
+      tasks: "诊断任务",
+      mcp: "MCP 接入",
+      settings: "资源与执行节点",
+    }[page];
+    for (const id of ["workspace", "tasks", "mcp", "settings"])
+      $(`#${id}-page`).hidden =
+        id === "workspace"
+          ? !["workspace", "local"].includes(page)
+          : page !== id;
+  }
+  function renderHeading() {
+    const local = page === "local";
+    const application = state.apps.find((item) => item.id === app);
+    const env = state.environments.find((item) => item.id === environment);
+    $("#application-category").textContent = local
+      ? "LOCAL / 我的电脑"
+      : `APPLICATION / ${labels[app]}`;
+    $("#application-name").textContent = local
+      ? "本机 Java 进程"
+      : application.name;
+    $("#application-description").textContent = local
+      ? "通过本机助手发现进程，与集群诊断共用工作区。"
+      : application.description;
+    $("#application-meta").innerHTML = local
+      ? `<span>${icon("monitor")}demo-workstation</span><span class="meta-divider"></span><span>${icon("link")}本机助手在线 · 模拟</span><span class="meta-divider"></span><span>仅当前用户的演示进程</span>`
+      : `<span>${icon("layers")}${escape(env.cluster)}</span><span class="meta-divider"></span><span>${icon("box")}${escape(env.namespace)}</span><span class="meta-divider"></span><span class="meta-badge">Java ${escape(application.javaVersion)}</span><span class="meta-owner">${escape(application.owner)}</span>`;
+    $("#instance-column-title").textContent = local
+      ? "进程 / JVM"
+      : "实例 / POD";
+    $("#local-scan-button").hidden = !local;
+    $("#refresh-button").title = local ? "扫描模拟 Java 进程" : "刷新模拟实例";
+    $("#refresh-button").setAttribute("aria-label", $("#refresh-button").title);
+    $("#pod-count").textContent = currentPods().length;
+    $("#app-task-count").textContent = appTasks().length;
+    $$(".section-tabs>[data-tab]").forEach((button) => {
+      const active = button.dataset.tab === tab;
+      button.setAttribute("aria-selected", active);
+      button.tabIndex = active ? 0 : -1;
+    });
+    $("#instances-panel").hidden = tab !== "instances";
+    $("#application-tasks-panel").hidden = tab !== "tasks";
+    $("#events-panel").hidden = tab !== "events";
+  }
+  function renderPods() {
+    let pods = visiblePods();
+    const grouped = $("#node-group").value === "node";
+    if (grouped) pods = [...pods].sort((a, b) => a.node.localeCompare(b.node));
+    let previousNode;
+    $("#pod-rows").innerHTML =
+      pods
+        .map((pod) => {
+          let group = "";
+          if (grouped && pod.node !== previousNode) {
+            group = `<tr class="group-row"><td colspan="7">${escape(pod.node)} · ${pods.filter((item) => item.node === pod.node).length} 个实例</td></tr>`;
+            previousNode = pod.node;
+          }
+          const running = state.tasks.filter(
+            (task) => task.target.key === pod.key && task.status === "running",
+          ).length;
+          return `${group}<tr class="${pod.key === selected ? "selected" : ""}" data-pod-row="${escape(pod.key)}"><td class="selection-cell"><input type="checkbox" data-select-pod="${escape(pod.key)}" aria-label="选择 ${escape(pod.name)}" ${checked.has(pod.key) ? "checked" : ""} ${pod.channel !== "ready" ? "disabled" : ""}></td><td><button class="pod-name-button" data-select="${escape(pod.key)}" aria-label="查看 ${escape(pod.name)} 的诊断工作区">${icon(pod.kind === "local" ? "monitor" : "box")}<span>${escape(pod.name)}</span></button><div class="pod-secondary"><span>${pod.kind === "local" ? `PID ${pod.pid}` : escape(pod.container)}</span><span class="tiny-separator"></span><span>${escape(pod.age)}</span><span class="tiny-separator"></span><span>代次 ${pod.generation}</span></div></td><td><span class="node-label">${icon(pod.kind === "local" ? "monitor" : "server")}${escape(pod.node)}</span></td><td><span class="running-state"><span class="status-dot green"></span>Running</span></td><td>${status(pod.channel)}</td><td><span class="task-cell${running ? " active" : ""}">${running ? icon("activity") : ""}${running ? `${running} 进行中` : "—"}</span></td><td><button class="row-action" data-${pod.channel === "ready" ? "diagnose" : "connect"}="${escape(pod.key)}">${pod.channel === "ready" ? "诊断" : "连接"}${icon("arrow", true)}</button></td></tr>`;
+        })
+        .join("") ||
+      '<tr class="empty-row"><td colspan="7">没有匹配的实例。调整搜索内容或连接状态筛选。</td></tr>';
+    const ready = currentPods().filter((pod) => pod.channel === "ready").length;
+    const managed = currentPods().filter((pod) => pod.managed).length;
+    $("#instance-summary").textContent =
+      `${pods.length} / ${currentPods().length} 个实例 · ${ready} 已连接 · ${managed} 已纳管${checked.size ? ` · 已选择 ${checked.size} 个` : ""}`;
+    $("#selected-diagnose").hidden = !checked.size;
+    $("#selected-diagnose").textContent = `诊断所选 ${checked.size} 个实例`;
+    const available = pods.filter((pod) => pod.channel === "ready");
+    $("#select-all").checked =
+      available.length > 0 && available.every((pod) => checked.has(pod.key));
+    $("#select-all").indeterminate =
+      available.some((pod) => checked.has(pod.key)) &&
+      !$("#select-all").checked;
+    $("#select-all").disabled = !available.length;
+  }
+  function renderEvents() {
+    const [env, application] = context();
+    const events = state.events
+      .filter((event) => event.environment === env && event.app === application)
+      .slice()
+      .reverse();
+    $("#connection-events").innerHTML =
+      events
+        .map(
+          (event) =>
+            `<li><span class="event-dot ${escape(event.kind)}"></span><div><strong>${escape(event.title)}</strong><p>${escape(event.detail)}</p></div><time>${date(event.at)}</time></li>`,
+        )
+        .join("") ||
+      "<li><div><strong>暂无连接事件</strong><p>连接、重连、任务提交与实例替换都会记录在这里。</p></div></li>";
+  }
+  function renderTasks(target, tasks) {
+    $(target).innerHTML =
+      tasks
+        .slice()
+        .reverse()
+        .map(
+          (task) =>
+            `<article class="task-list-row"><span class="task-list-icon">${icon(tools[task.tool][2])}</span><div><h3>${escape(tools[task.tool][0])} <span class="tool-code">${escape(task.tool)}</span></h3><p>${escape(task.target.name)} · g${task.target.generation} · ${escape(task.id.replace("demo-task-", "#"))}</p></div><span class="task-env">${escape(task.target.environmentName)}<br>${escape(task.target.appName)}</span><span class="task-status">${status(task.status, "task")}</span><time>${date(task.createdAt)}</time><div class="task-list-actions"><button class="text-button" data-open-task="${task.id}">查看</button>${task.status === "running" ? `<button class="text-button" data-cancel="${task.id}">取消</button>` : ""}</div></article>`,
+        )
+        .join("") ||
+      `<div class="empty-state compact">${icon("activity")}<h3>暂无匹配的诊断任务</h3><p>从实例发起诊断后，可以在这里跨环境追踪结果。</p></div>`;
+  }
+  function chosenTask() {
+    const tasks = state.tasks.filter(
+      (task) => task.target.key === selected && task.tool === tool,
+    );
+    const id = taskByTool.get(`${selected}/${tool}`);
+    return tasks.find((task) => task.id === id) || tasks.at(-1);
+  }
+  function resultData(task) {
+    const result = task.result;
+    if (task.tool === "trace")
+      return `<div class="result-table-scroll"><table class="trace-table"><thead><tr><th>方法调用</th><th class="time-cell">耗时</th><th class="percent-cell">占比</th></tr></thead><tbody>${result.trace.map((row) => `<tr class="${row.depth > 0 && row.percent > 70 ? "slow-row" : ""}"><td><span class="tree-indent">${row.depth ? "　".repeat(row.depth - 1) + "└─" : "↳"}</span>${escape(row.method)}</td><td class="time-cell">${row.ms.toFixed(1)} ms</td><td class="percent-cell">${row.percent.toFixed(1)}%</td></tr>`).join("")}</tbody></table></div>`;
+    if (task.tool === "thread")
+      return `<div class="result-table-scroll"><table class="plain-table"><thead><tr><th>ID / 线程</th><th>状态</th><th>CPU（示例）</th></tr></thead><tbody>${result.threads.map((thread) => `<tr><td><span class="thread-name">${thread.id} · ${escape(thread.name)}</span><details class="stack-details"><summary>查看调用栈</summary><pre>${escape(thread.stack.join("\n"))}</pre></details></td><td><span class="status ${thread.state === "RUNNABLE" ? "green" : "gray"}">${escape(thread.state)}</span></td><td>${thread.cpu}%</td></tr>`).join("")}</tbody></table></div>`;
+    if (task.tool === "watch")
+      return result.samples
+        .map(
+          (sample, index) =>
+            `<article class="watch-sample"><header><span>观测 #${index + 1} · ${date(new Date(sample.time).getTime())}</span><span>正常返回 · 示例</span></header><pre>${escape(JSON.stringify({ params: sample.params, returnObj: sample.returnObj, throwExp: sample.throwExp }, null, 2))}</pre></article>`,
+        )
+        .join("");
+    if (task.tool === "jvm") {
+      const names = {
+        name: "虚拟机",
+        javaVersion: "Java 版本",
+        pid: "进程 PID",
+        application: "所属应用",
+        uptime: "运行时间",
+        processors: "可用处理器",
+        arguments: "启动参数",
+      };
+      return `<div class="result-key-values">${result.rows.map((row) => `<div class="key-value"><span>${escape(names[row.name] || row.name)}</span><strong>${escape(row.value)}</strong></div>`).join("")}</div>`;
+    }
+    if (task.tool === "memory")
+      return `<div class="result-table-scroll"><table class="plain-table"><thead><tr><th>内存区域</th><th>已使用</th><th>已提交</th><th>最大值</th></tr></thead><tbody>${result.memory.map((row) => `<tr><td>${escape(row.name)}</td><td>${escape(row.used)}</td><td>${escape(row.committed)}</td><td>${escape(row.max)}</td></tr>`).join("")}</tbody></table></div>`;
+    if (task.tool === "ognl")
+      return `<pre class="value-result">${escape(JSON.stringify(result.value, null, 2))}</pre>`;
+    if (task.tool === "sc")
+      return result.classes
+        .map(
+          (row) =>
+            `<div class="class-row">${escape(row.name)}<span>${escape(row.classLoader)} · ${escape(row.codeSource)}</span></div>`,
+        )
+        .join("");
+    if (task.tool === "profiler")
+      return `<div class="result-table-scroll"><table class="plain-table"><thead><tr><th>采样栈（模拟）</th><th>样本数</th><th>样本占比</th></tr></thead><tbody>${result.frames.map((row) => `<tr><td class="thread-name"><span class="tree-indent">${row.depth ? "　".repeat(row.depth - 1) + "└─" : ""}</span>${escape(row.name)}</td><td>${row.samples}</td><td>${row.percent}%</td></tr>`).join("")}</tbody></table></div>`;
+    return "";
+  }
+  function taskResult(task, standalone = false) {
+    const pod = podFor(task.target.key);
+    const target = task.target;
+    const targetLine = `<div class="result-target-line">${icon("box")}<span class="result-target-copy">${escape(target.environmentName)} / ${escape(target.name)} <span>· JVM g${target.generation}</span></span>${status(task.status, "task")}</div>`;
+    let content;
+    if (task.status === "running")
+      content = `<div class="state-message"><span class="spinner"></span><div><strong>${pod?.channel === "reconnecting" ? "通道恢复中，保留原任务身份" : ["trace", "watch"].includes(task.tool) ? "等待目标方法执行…" : "正在收集模拟诊断结果…"}</strong><span>模拟任务可独立运行，切换页面不会改变执行目标。</span></div><button class="button secondary" data-cancel="${task.id}">${icon("stop")}取消任务</button></div>`;
+    else if (task.status !== "succeeded")
+      content = `<div class="state-message">${icon(task.status === "interrupted" ? "info" : "stop")}<div><strong>${task.status === "interrupted" ? "任务已中断，未自动重放" : "模拟任务已取消"}</strong><span>${task.status === "interrupted" ? "实例已更替或等待超时。历史目标与代次保留，不能转移到新 JVM。" : "结果不会在取消后继续写入。真实任务停止仍需目标端确认。"}</span></div></div>`;
+    else
+      content = `<div class="result-summary"><span class="sample-badge">模拟采样</span><span>${escape(task.result.summary.replace(/^模拟调用链：|^模拟线程快照：|^模拟 JVM 概览：/, ""))}</span></div>${resultData(task)}<div class="result-footnote"><span>${escape(task.id)} · ${date(task.finishedAt)} · 所有数值为示例</span><button class="text-button" data-raw="${task.id}" aria-expanded="false">原始结果 ${icon("code", true)}</button></div><pre class="raw-result" id="raw-${task.id}${standalone ? "-standalone" : ""}" hidden>${escape(JSON.stringify(task.result, null, 2))}</pre>`;
+    return `${targetLine}${content}`;
+  }
+  function renderResult() {
+    const pod = selectedPod();
+    $("#diagnostic-workspace").hidden = !pod;
+    if (!pod) return;
+    $("#detail-pod").textContent = pod.name;
+    $("#detail-subtitle").textContent =
+      `${environmentName(pod.environment)} / ${pod.kind === "local" ? `PID ${pod.pid}` : pod.node} · JVM g${pod.generation}${pod.retired ? " · 原实例已替换" : ""}`;
+    $$("[data-tool]").forEach((button) => {
+      const active = button.dataset.tool === tool;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    const task = chosenTask();
+    const tasks = state.tasks.filter(
+      (item) => item.target.key === selected && item.tool === tool,
+    );
+    let content = `<div class="result-heading"><div><h2>${tools[tool][0]}<span class="tool-code">${tool}</span></h2><p>${tools[tool][1]}</p></div><div class="result-heading-actions">${task?.status === "succeeded" ? `<button class="text-button" data-copy-result="${task.id}">${icon("copy", true)}复制</button>` : ""}<button class="button secondary" data-diagnose="${escape(selected)}">${icon("play")}${pod.channel === "ready" ? "运行诊断" : "连接并诊断"}</button></div></div>`;
+    if (tasks.length > 1)
+      content += `<div class="task-tabs" aria-label="该实例的历史任务">${tasks
+        .slice(-6)
+        .map(
+          (item) =>
+            `<button class="task-tab${item.id === task?.id ? " active" : ""}" data-task-tab="${item.id}" aria-pressed="${item.id === task?.id}"><span class="status-dot ${item.status === "succeeded" ? "green" : item.status === "running" ? "amber" : ""}"></span>${escape(item.id.replace("demo-task-", "#"))} · ${date(item.createdAt)}</button>`,
+        )
+        .join("")}</div>`;
+    content += task
+      ? taskResult(task)
+      : `<div class="empty-state">${icon(tools[tool][2])}<h3>${pod.retired ? "原实例已替换" : `在此实例上开始${tools[tool][0]}`}</h3><p>${pod.retired ? "历史任务仍绑定原 UID；请在上方选择新实例。" : pod.channel === "ready" ? "配置诊断参数，结果会按任务保留。示例操作不会影响真实进程。" : "通道尚未就绪。模拟连接完成后，可在此配置诊断。"}</p><button class="button primary" data-diagnose="${escape(selected)}" ${pod.retired ? "disabled" : ""}>${icon("play")}${pod.channel === "ready" ? "配置诊断" : "连接并诊断"}</button></div>`;
+    $("#result-content").innerHTML = content;
+  }
+  function renderAllTasks() {
+    const query = $("#task-search").value.trim().toLowerCase(),
+      filter = $("#task-status-filter").value;
+    renderTasks(
+      "#all-tasks",
+      state.tasks.filter(
+        (task) =>
+          (filter === "all" || task.status === filter) &&
+          (!query ||
+            `${task.target.name} ${task.target.appName} ${task.target.environmentName} ${task.tool}`
+              .toLowerCase()
+              .includes(query)),
+      ),
+    );
+    const task = state.tasks.find((task) => task.id === taskDetail);
+    $("#task-result").hidden = !task;
+    if (task)
+      $("#task-result").innerHTML =
+        `<div class="result-heading"><div><h2>${tools[task.tool][0]}<span class="tool-code">${task.tool}</span></h2><p>此结果绑定提交时的目标，独立于当前导航环境。</p></div><button class="icon-button" id="close-task-result" aria-label="关闭任务结果">${icon("close")}</button></div><div class="task-result-label">${escape(task.target.podUid)} · ${escape(task.id)}</div>${taskResult(task, true)}`;
+  }
+  function signature() {
+    return JSON.stringify([
+      state.pods.map((p) => [p.key, p.channel, p.managed, p.retired]),
+      state.tasks.map((t) => [t.id, t.status]),
+      state.events.length,
+      state.policies,
+    ]);
+  }
+  function render() {
+    renderNavigation();
+    if (page === "workspace" || page === "local") {
+      renderHeading();
+      renderPods();
+      renderTasks("#application-tasks", appTasks());
+      renderEvents();
+      renderResult();
+    }
+    if (page === "tasks") renderAllTasks();
+    lastSignature = signature();
+  }
+  function selectPod(key) {
+    selected = key;
+    selectionByContext.set(context().join("/"), key);
+    renderPods();
+    renderResult();
+  }
+  function showInfo(title, content, eyebrow = "WORKSPACE") {
+    $("#info-title").textContent = title;
+    $("#info-eyebrow").textContent = eyebrow;
+    $("#info-content").innerHTML = content;
+    if (!$("#info-dialog").open) $("#info-dialog").showModal();
+  }
+  function openIdentity() {
+    const pod = selectedPod();
+    if (!pod) return;
+    const pairs = [
+      ["环境", environmentName(pod.environment)],
+      ["应用", appName(pod.app)],
+      ["实例名称", pod.name],
+      ["Pod / 进程 UID", pod.podUid],
+      ["JVM 代次", `g${pod.generation}`],
+      ["容器 / PID", `${pod.container} / ${pod.pid}`],
+      ["K8s Node", pod.kind === "k8s" ? pod.node : "不适用"],
+      ["执行节点", pod.connector],
+      ["通道状态", channelNames[pod.channel][0]],
+    ];
+    showInfo(
+      "实例身份",
+      `<dl class="identity-grid">${pairs.map(([key, value]) => `<dt>${key}</dt><dd>${escape(value)}</dd>`).join("")}</dl><div class="inline-note">同名实例重建后会生成新的 UID。已提交任务不会转移到新实例。</div>`,
+      "TARGET IDENTITY",
+    );
+  }
+  function openPolicy() {
+    const [env, application] = context();
+    const current = state.policies[`${env}/${application}`];
+    const options = [
+      [
+        "selected",
+        "维护已接入实例",
+        "已纳管的每个实例独立保活；新发现的副本等待明确接入。",
+      ],
+      [
+        "all",
+        "维护应用的全部副本",
+        "接入当前全部副本，并纳管之后发现的新副本。真实部署需配额和权限。",
+      ],
+      [
+        "discover",
+        "仅发现，不维护连接",
+        "停止此应用的连接维护。存在进行中任务时不可切换。",
+      ],
+    ];
+    showInfo(
+      "连接维护策略",
+      `<p class="body-copy">${escape(environmentName(env))} / ${escape(appName(application))}</p><form id="policy-form">${options.map(([value, title, description]) => `<label class="policy-option"><input type="radio" name="policy" value="${value}" ${value === current ? "checked" : ""}><span><strong>${title}</strong><p>${description}</p></span></label>`).join("")}<div class="inline-note">当前保活和恢复均在浏览器中模拟。正式产品由后台维护，不依赖网页是否打开。</div><p id="policy-error" class="form-error" role="alert"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close>取消</button><button class="button primary" type="submit">应用模拟策略</button></div></form>`,
+      "CONNECTION POLICY",
+    );
+    $("#policy-form").addEventListener("submit", (event) => {
+      event.preventDefault();
       try {
-        const status = await api(`/api/jobs/${job.id}`);
-        if (version !== epoch) return;
-        pollErrors = 0;
-        if (status.status === 'running') { pollTimer = setTimeout(poll, 700); return; }
-        jobId = null;
-        const resultFailed = status.result?.isError === true || status.result?.success === false;
-        record.status = resultFailed ? 'failed' : status.status;
-        record.text = status.error || formatResult(status.result) || '操作已结束，没有返回内容。';
-        if (record.status === 'succeeded' && onResult) onResult(status.result);
-        if (record.status === 'failed' && ['probe', 'diagnose', 'attach_local'].includes(operation.action)) verified.delete(target);
-        renderHistory(); render();
-        await refresh();
+        store.setPolicy(
+          env,
+          application,
+          new FormData(event.currentTarget).get("policy"),
+        );
+        $("#info-dialog").close();
+        render();
+        toast("模拟连接策略已更新。");
       } catch (error) {
-        if (version !== epoch) return;
-        if (error.status === 401) { logout(); notice('登录已失效，请重新登录。已提交的操作不会重放。'); return; }
-        if (error.status === 404) {
-          jobId = null; record.status = 'failed'; record.text = '服务端不再提供此任务记录，执行结果未知。请验证连接后再继续。';
-          verified.delete(target); renderHistory(); render(); return;
-        }
-        pollErrors++;
-        record.text = `暂时无法读取任务状态：${error.message}\n正在重试读取结果，不会重新执行诊断。`;
-        renderResult();
-        if (pollErrors === 1) notice('读取任务状态失败，正在恢复查询。');
-        pollTimer = setTimeout(poll, 4000);
+        $("#policy-error").textContent = error.message;
       }
-    };
-    await poll();
-  } catch (error) {
-    if (version !== epoch) return;
-    submitting = false;
-    record.status = 'failed';
-    record.text = `${error.message}\n${error.status ? '服务拒绝了此次请求。' : '未收到提交确认，执行状态未知；不会自动重试提交。'}`;
-    history.push(record);
-    if (history.length > 50) history.shift();
-    renderHistory(); render(); notice(error.message);
+    });
   }
-}
-$('probe').onclick = () => {
-  const id = selected;
-  start({action: 'probe', instance_id: id}, result => {
-    const names = (result.tools || []).map(tool => typeof tool === 'string' ? tool : tool.name);
-    verified.set(id, {tools: names, tasks: result.tasks === true, time: new Date().toLocaleTimeString('zh-CN', {hour12: false})});
-    notice('MCP 握手完成，已读取目标工具列表。');
-  });
-};
-$('scan').onclick = () => {
-  const item = current();
-  if (!item) return;
-  start({action: 'scan_java', node_id: item.node_id}, result => {
-    processes = result.processes || [];
-    $('pid').replaceChildren();
-    for (const process of processes) {
-      const option = node('option', `${process.pid} · ${process.identity}`);
-      option.value = String(process.pid);
-      $('pid').append(option);
+  function openScenarios() {
+    const pod = selectedPod();
+    if (!pod || pod.retired) {
+      toast("请先选择一个当前实例。");
+      return;
     }
-    $('processes').hidden = false;
-    if (!processes.length) notice(result.detail || '没有发现当前助手可访问的 Java 进程。');
-  });
-};
-$('close-processes').onclick = () => { $('processes').hidden = true; };
-$('attach').onclick = () => {
-  const process = processes.find(candidate => String(candidate.pid) === $('pid').value);
-  if (!process || busy()) return;
-  pendingAttach = {pid: process.pid, identity: process.identity, instance_id: selected};
-  $('attach-target').textContent = `PID ${process.pid}\n${process.identity}`;
-  $('attach-dialog').showModal();
-};
-function closeAttach() { $('attach-dialog').close(); pendingAttach = null; }
-$('close-attach').onclick = closeAttach;
-$('dismiss-attach').onclick = closeAttach;
-$('attach-dialog').addEventListener('cancel', () => { pendingAttach = null; });
-$('confirm-attach').onclick = () => {
-  const process = pendingAttach;
-  if (!process || process.instance_id !== selected || busy() || $('attach').disabled) { closeAttach(); return; }
-  closeAttach();
-  verified.delete(selected);
-  start({action: 'attach_local', ...process}, () => notice('Attach 操作已返回。请验证 MCP 连接后开始诊断。'));
-};
-$('diagnose-form').onsubmit = event => {
-  event.preventDefault();
-  if ($('run').disabled || !current()) return;
-  const tool = selectedTool;
-  let args = {};
-  if (tool === 'thread') {
-    const topN = Number($('top-n').value);
-    if (!Number.isInteger(topN) || topN < 1 || topN > 50) { notice('线程数量应为 1–50 的整数。'); return; }
-    args = {topN};
+    showInfo(
+      "体验连接生命周期",
+      `<div class="target-summary"><strong>${escape(pod.name)}</strong>${escape(environmentName(pod.environment))} · JVM g${pod.generation}</div><p class="field-hint">仅操作所选模拟实例。可先发起 Watch，再体验重连或重建。</p><div class="scenario-options"><button class="scenario-option" data-scenario="disconnect" ${!pod.managed ? "disabled" : ""}>${icon("refresh")}<span><strong>模拟短暂断线</strong><small>单条通道约 5 秒后恢复，其他实例不受影响。</small></span>${icon("arrow")}</button><button class="scenario-option" data-scenario="replace">${icon("box")}<span><strong>模拟同名实例重建</strong><small>UID 与 JVM 代次变化，旧任务中断，不自动重放。</small></span>${icon("arrow")}</button></div><div class="dialog-footer"><button class="button secondary" data-close>返回工作台</button></div>`,
+      "LIFECYCLE DEMO",
+    );
+    $$("#info-content [data-scenario]").forEach((button) =>
+      button.addEventListener("click", () => {
+        try {
+          if (button.dataset.scenario === "disconnect")
+            store.disconnect(pod.key);
+          else {
+            const replacement = store.replacePod(pod.key);
+            checked.delete(pod.key);
+            selectionByContext.set(context().join("/"), replacement.key);
+          }
+          $("#info-dialog").close();
+          render();
+          toast(
+            button.dataset.scenario === "disconnect"
+              ? "所选通道已模拟断开，将独立恢复。"
+              : "发现同名新实例。下方保留旧任务，上方可选择新代次。",
+          );
+        } catch (error) {
+          toast(error.message);
+        }
+      }),
+    );
   }
-  if (['trace', 'watch'].includes(tool)) {
-    const classPattern = $('class-pattern').value.trim();
-    const timeout = Number($('timeout').value);
-    if (!classPattern) { notice('请填写目标类名。'); $('class-pattern').focus(); return; }
-    if (!Number.isInteger(timeout) || timeout < 1 || timeout > 300) { notice('等待时间应为 1–300 秒的整数。'); return; }
-    args = {classPattern, methodPattern: $('method-pattern').value.trim() || '*', timeout, numberOfExecutions: 1};
-    if (tool === 'watch') args.express = '{params,returnObj,throwExp}';
+  function toolFields() {
+    const value = $("#diagnose-tool").value,
+      method = ["trace", "watch"].includes(value),
+      expression = ["watch", "ognl"].includes(value);
+    $("#method-fields").hidden = !method;
+    $$("#method-fields input").forEach((input) => {
+      input.disabled = !method;
+      input.required = method;
+    });
+    $("#expression-field").hidden = !expression;
+    $("#expression").disabled = !expression;
+    if (value === "ognl")
+      $("#expression").value = '@java.lang.System@getProperty("java.version")';
+    else if (value === "watch")
+      $("#expression").value = "{params, returnObj, throwExp}";
   }
-  start({action: 'diagnose', instance_id: selected, tool, arguments: args});
-};
-$('cancel').onclick = async () => {
-  if (!jobId) return;
-  const version = epoch;
-  $('cancel').disabled = true;
-  try {
-    await api(`/api/jobs/${jobId}`, {method: 'DELETE'});
-    if (version === epoch) notice('取消请求已提交。取消等待不保证撤回已经开始的操作。');
-  } catch (error) { if (version === epoch) notice(error.message); }
-  finally { $('cancel').disabled = false; }
-};
-
-const guides = {
-  connect: {title: '把目标接入工作台', intro: '当前版本通过已配置的助手接入目标。扫描和诊断由助手在目标环境中执行。', steps: [
-    ['本机 Java', '运行配置好的本机助手，选择本机实例，再扫描 Java 进程。已有 Arthas 端点可先验证连接。'],
-    ['Kubernetes', '管理员为执行节点配置 kubeconfig、命名空间、Pod 与 Arthas HTTP 端口。节点建立转发后，这里会出现目标。'],
-    ['验证并开始诊断', '验证 HTTP / MCP 通道，检查工具能力，再运行诊断或接入 MCP 客户端。']
-  ], note: '一键安装、设备配对、动态实例登记与自动复用正在规划中，当前页面不会替你创建这些配置。'},
-  local: {title: '接入本机助手', intro: '助手在你的电脑运行，主动连接中心服务。网页通过助手扫描和操作 Java 进程。', steps: [
-    ['准备助手配置', '管理员配置中心地址、节点身份与本机目标。用户令牌和节点令牌分别使用。'],
-    ['运行助手并扫描', '助手上线后，在“连接与诊断”选择本机目标，点击“扫描 Java”。'],
-    ['明确选择目标', '选择进程并确认 Attach。助手检查进程身份，使用独立资源目录，默认关闭 Telnet。']
-  ], note: '当前原型没有可下载的一键安装包。Attach 需要助手配置 Arthas 资源目录、开放权限，并满足目标 JVM 的 Attach 条件。'},
-  k8s: {title: '接入 Kubernetes', intro: '执行节点负责访问集群和建立 Pod 转发，同事通过统一网页访问授权目标。', steps: [
-    ['准备执行节点', '由管理员配置 kubeconfig、命名空间、Pod 和远端 Arthas HTTP 端口。'],
-    ['建立 Pod 转发', '节点在本机分配转发端口，通过反向连接将 HTTP / MCP 请求转到 Pod。'],
-    ['验证可用能力', '在工作台选择 K8s 目标，验证连接后运行诊断。离线状态不会被当作已连接。']
-  ], note: 'Pod 内当前需要已有可用 Arthas。Perl 资源传输与 K8s 自动 Attach 尚未实现，不依赖 OBS。'},
-  assets: {title: 'Arthas 资源准备流程', intro: '最终目标是由中心统一管理 arthas-bin.zip，用户只需运行助手。', steps: [
-    ['中心管理资源', '登记 Arthas 版本、包大小与 SHA-256 校验值，选定团队使用的资源版本。'],
-    ['助手按需准备', '助手下载、校验并缓存资源；本机进程扫描可独立进行，不必等待下载。'],
-    ['连接选中的 JVM', '确认目标与权限后，使用准备好的资源 Attach，再验证 HTTP / MCP 通道。']
-  ], note: '以上自动下发流程尚未接入。当前原型使用管理员预先配置的本地 Arthas 目录，不会在此页面触发下载。'},
-  capabilities: {title: '完整诊断能力，一步步接入', intro: '核心能力会集中在同一工作台，通过表单操作与 MCP 调用，不提供 Telnet 交互终端。', steps: [
-    ['现在可用 · 基础诊断', 'JVM、Memory、Thread、Version。本机与 K8s 目标共用调用链路。'],
-    ['现在可用 · 方法观察', 'Trace 查看方法内部调用，Watch 观察入参、返回值与异常。需要目标支持任务能力。'],
-    ['待接入 · 深度诊断', 'OGNL 表达式、类与方法检索、反编译、Profiler、Dump、编译与热更新；OGNL 需一并补齐超时与 JDBC 防护。'],
-    ['待接入 · 团队协作', '服务器资源下发、自动配对、动态实例登记、已有 Arthas 复用、持久审计。']
-  ], note: '“现在可用”指网关已接入的功能，仍取决于目标 Arthas 能力与用户权限。静态预览全部使用模拟数据。'}
-};
-function openGuide(key) {
-  const guide = guides[key];
-  if (!guide) return;
-  $('guide-title').textContent = guide.title;
-  const content = $('guide-content');
-  content.replaceChildren(node('p', guide.intro));
-  const list = node('ol', '', 'setup-list');
-  guide.steps.forEach(([title, description], index) => {
-    const item = node('li');
-    const text = node('div');
-    text.append(node('strong', title), node('p', description));
-    item.append(node('span', String(index + 1).padStart(2, '0')), text);
-    list.append(item);
-  });
-  content.append(list, node('p', guide.note, 'hint'));
-  $('guide-dialog').showModal();
-}
-all('[data-guide]').forEach(button => { button.onclick = () => openGuide(button.dataset.guide); });
-$('close-guide').onclick = () => $('guide-dialog').close();
-$('guide-done').onclick = () => $('guide-dialog').close();
-for (const id of ['guide-dialog', 'attach-dialog']) {
-  $(id).addEventListener('click', event => {
-    const bounds = $(id).getBoundingClientRect();
-    if (event.target === $(id) && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) {
-      if (id === 'attach-dialog') closeAttach(); else $(id).close();
+  function prepareDiagnosis(keys) {
+    const pods = keys.map(podFor).filter(Boolean);
+    if (!pods.length || pods.some((pod) => pod.retired)) {
+      toast("目标已替换，请重新选择当前实例。");
+      return;
+    }
+    if (pods.some((pod) => pod.channel !== "ready")) {
+      if (pods.length > 1) {
+        toast("批量诊断前请先连接全部所选实例。");
+        return;
+      }
+      const pod = pods[0];
+      store.connect(pod.key);
+      pendingConnection = { key: pod.key, tool };
+      render();
+      showInfo(
+        "正在准备诊断通道",
+        `<div class="target-summary"><strong>${escape(pod.name)}</strong>${escape(environmentName(pod.environment))} · JVM g${pod.generation}</div><div class="state-message"><span class="spinner"></span><div><strong>模拟识别与连接…</strong><span>约 2 秒后进入诊断配置，不会访问真实进程。</span></div></div>`,
+        "PREPARE TARGET",
+      );
+      return;
+    }
+    dialogTargets = pods.map((pod) => ({
+      key: pod.key,
+      generation: pod.generation,
+      podUid: pod.podUid,
+    }));
+    $("#diagnose-targets").innerHTML =
+      `<strong>${escape(environmentName(pods[0].environment))} / ${escape(appName(pods[0].app))} · ${pods.length} 个目标</strong>${pods.map((pod) => `<code>${escape(pod.name)} · JVM g${pod.generation}</code>`).join("")}`;
+    $("#diagnose-tool").value = tool;
+    $("#diagnose-error").textContent = "";
+    toolFields();
+    $("#diagnose-dialog").showModal();
+  }
+  $("#diagnose-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      if (!dialogTargets.length) throw new Error("请选择诊断目标。");
+      const pods = dialogTargets.map((target) => {
+        const pod = podFor(target.key);
+        if (
+          !pod ||
+          pod.retired ||
+          pod.generation !== target.generation ||
+          pod.podUid !== target.podUid ||
+          pod.channel !== "ready"
+        )
+          throw new Error("目标状态已变化，请关闭配置后重新选择。");
+        return pod;
+      });
+      const selectedTool = $("#diagnose-tool").value;
+      const parameters = {};
+      if (["trace", "watch"].includes(selectedTool)) {
+        parameters.classPattern = $("#class-pattern").value.trim();
+        parameters.methodPattern = $("#method-pattern").value.trim();
+        parameters.timeoutSeconds = Number($("#task-timeout").value);
+      }
+      if (["watch", "ognl"].includes(selectedTool))
+        parameters.expression = $("#expression").value;
+      // Prevalidate the whole group before creating any child task.
+      if (
+        ["trace", "watch"].includes(selectedTool) &&
+        (!parameters.classPattern ||
+          !parameters.methodPattern ||
+          !Number.isInteger(parameters.timeoutSeconds) ||
+          parameters.timeoutSeconds < 5 ||
+          parameters.timeoutSeconds > 120)
+      )
+        throw new Error("请填写类名、方法名，以及 5–120 秒的整数等待上限。");
+      if (
+        state.tasks.filter((task) => task.status === "running").length +
+          pods.length >
+        100
+      )
+        throw new Error("模拟任务数量已达上限，请先完成或取消部分任务。");
+      const tasks = pods.map((pod) =>
+        store.startTask(pod.key, selectedTool, parameters),
+      );
+      tasks.forEach((task) =>
+        taskByTool.set(`${task.target.key}/${task.tool}`, task.id),
+      );
+      selected = pods[0].key;
+      tool = selectedTool;
+      tab = "instances";
+      checked.clear();
+      $("#diagnose-dialog").close();
+      render();
+      toast(
+        tasks.length > 1
+          ? `已创建 ${tasks.length} 个独立任务，可在诊断任务中分别查看与取消。`
+          : "模拟诊断已开始，可继续切换应用或环境。",
+      );
+      $("#diagnostic-workspace").scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    } catch (error) {
+      $("#diagnose-error").textContent = error.message;
     }
   });
-}
-// Authentication and diagnostic data deliberately never enter persistent browser storage.
+  async function copy(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("已复制。");
+    } catch {
+      showInfo(
+        "复制内容",
+        `<p class="body-copy">当前浏览器未允许剪贴板访问，可选中下方内容复制。</p><pre class="raw-result">${escape(text)}</pre>`,
+        "COPY",
+      );
+    }
+  }
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("button,[data-copy]");
+    if (!button) return;
+    const data = button.dataset;
+    if ("close" in data) {
+      button.closest("dialog")?.close();
+      return;
+    }
+    if (data.page) {
+      showPage(data.page);
+      return;
+    }
+    if (data.app) {
+      selectionByContext.set(context().join("/"), selected);
+      app = data.app;
+      page = "workspace";
+      tab = "instances";
+      resetSelection();
+      closeNavigation();
+      render();
+      return;
+    }
+    if (data.select) {
+      selectPod(data.select);
+      return;
+    }
+    if (data.tool) {
+      tool = data.tool;
+      renderResult();
+      return;
+    }
+    if (data.tab) {
+      tab = data.tab;
+      renderHeading();
+      return;
+    }
+    if (data.diagnose) {
+      prepareDiagnosis([data.diagnose]);
+      return;
+    }
+    if (data.connect) {
+      store.connect(data.connect);
+      render();
+      toast("正在模拟连接，约 2 秒后就绪。");
+      return;
+    }
+    if (data.cancel) {
+      store.cancelTask(data.cancel);
+      render();
+      toast("模拟任务已取消。");
+      return;
+    }
+    if (data.openTask) {
+      taskDetail = data.openTask;
+      page = "tasks";
+      render();
+      $("#task-result").scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+      return;
+    }
+    if (data.taskTab) {
+      const task = state.tasks.find((task) => task.id === data.taskTab);
+      if (task) {
+        taskByTool.set(`${selected}/${tool}`, task.id);
+        renderResult();
+      }
+      return;
+    }
+    if (data.raw) {
+      const pre = button
+        .closest(".result-workspace,.standalone-result")
+        .querySelector(".raw-result");
+      if (pre) {
+        pre.hidden = !pre.hidden;
+        button.setAttribute("aria-expanded", !pre.hidden);
+      }
+      return;
+    }
+    if (data.copy) {
+      copy($(`#${data.copy}`).textContent);
+      return;
+    }
+    if (data.copyResult) {
+      const task = state.tasks.find((task) => task.id === data.copyResult);
+      copy(
+        JSON.stringify({ target: task.target, result: task.result }, null, 2),
+      );
+      return;
+    }
+    if (button.id === "close-task-result") {
+      taskDetail = null;
+      renderAllTasks();
+    }
+  });
+  $("#environment").addEventListener("change", () => {
+    selectionByContext.set(context().join("/"), selected);
+    environment = $("#environment").value;
+    page = "workspace";
+    tab = "instances";
+    resetSelection();
+    render();
+  });
+  $("#app-search").addEventListener("input", renderNavigation);
+  $("#pod-search").addEventListener("input", renderPods);
+  $("#channel-filter").addEventListener("change", renderPods);
+  $("#node-group").addEventListener("change", renderPods);
+  $("#pod-rows").addEventListener("change", (event) => {
+    const key = event.target.dataset.selectPod;
+    if (key) {
+      event.target.checked ? checked.add(key) : checked.delete(key);
+      renderPods();
+    }
+  });
+  $("#select-all").addEventListener("change", (event) => {
+    visiblePods()
+      .filter((pod) => pod.channel === "ready")
+      .forEach((pod) =>
+        event.target.checked ? checked.add(pod.key) : checked.delete(pod.key),
+      );
+    renderPods();
+  });
+  $("#task-search").addEventListener("input", renderAllTasks);
+  $("#task-status-filter").addEventListener("change", renderAllTasks);
+  $("#diagnose-tool").addEventListener("change", toolFields);
+  $("#diagnose-button").addEventListener("click", () =>
+    prepareDiagnosis(checked.size ? [...checked] : [selected]),
+  );
+  $("#selected-diagnose").addEventListener("click", () =>
+    prepareDiagnosis([...checked]),
+  );
+  $("#identity-button").addEventListener("click", openIdentity);
+  $("#policy-button").addEventListener("click", openPolicy);
+  $("#scenario-button").addEventListener("click", openScenarios);
+  $("#refresh-button").addEventListener("click", () => {
+    if (page === "local") {
+      const before = currentPods().length;
+      store.scanLocal();
+      render();
+      toast(
+        currentPods().length > before
+          ? "模拟扫描完成，发现 1 个新 JVM。"
+          : "模拟扫描完成，暂无新进程。",
+      );
+    } else {
+      store.tick();
+      render();
+      toast("模拟实例状态已同步。");
+    }
+  });
+  $("#local-scan-button").addEventListener("click", () =>
+    $("#refresh-button").click(),
+  );
+  $("#mobile-menu").addEventListener("click", () => {
+    const open = !$("#sidebar").classList.contains("open");
+    $("#sidebar").classList.toggle("open", open);
+    $("#nav-scrim").hidden = !open;
+    $("#mobile-menu").setAttribute("aria-expanded", open);
+    syncNavigation();
+    if (open) $("#environment").focus();
+  });
+  $("#nav-scrim").addEventListener("click", closeNavigation);
+  $("#about-button").addEventListener("click", () =>
+    showInfo(
+      "一个工作台，明确每一个目标。",
+      '<div class="info-copy"><p>这是 Arthas Workbench 的交互设计原型，展示多环境应用、多副本诊断、连接维护与任务生命周期。</p><p>全部进程、集群、指标与操作均为模拟。页面不发送 API 请求，不访问本机进程，刷新会恢复初始场景。</p><p>环境模型、独立保活、OGNL、Profiler、资源下发和持久任务仍需后端实现；现有双链路运行原型的能力以项目文档为准。</p></div>',
+      "PROTOTYPE / 0.2",
+    ),
+  );
+  $("#info-dialog").addEventListener("close", () => {
+    pendingConnection = null;
+  });
+  $$("dialog").forEach((dialog) =>
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) {
+        const rect = dialog.getBoundingClientRect();
+        if (
+          event.clientX < rect.left ||
+          event.clientX > rect.right ||
+          event.clientY < rect.top ||
+          event.clientY > rect.bottom
+        )
+          dialog.close();
+      }
+    }),
+  );
+  $(".section-tabs").addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const buttons = $$(".section-tabs>[data-tab]");
+    let index = buttons.indexOf(document.activeElement);
+    if (index < 0) return;
+    event.preventDefault();
+    index =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? buttons.length - 1
+          : (index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) %
+            buttons.length;
+    tab = buttons[index].dataset.tab;
+    renderHeading();
+    buttons[index].focus();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeNavigation();
+  });
+  $("#mcp-config").textContent = JSON.stringify(
+    {
+      mcpServers: {
+        "arthas-workbench": {
+          type: "http",
+          url: "https://workbench.example/mcp",
+          headers: { Authorization: "Bearer <YOUR_USER_TOKEN>" },
+        },
+      },
+    },
+    null,
+    2,
+  );
+  syncNavigation();
+  render();
+  setInterval(() => {
+    store.tick();
+    if (pendingConnection) {
+      const pending = pendingConnection,
+        pod = podFor(pending.key);
+      if (pod?.channel === "ready" && !pod.retired) {
+        pendingConnection = null;
+        $("#info-dialog").close();
+        tool = pending.tool;
+        prepareDiagnosis([pending.key]);
+      } else if (!pod || pod.retired) {
+        pendingConnection = null;
+        $("#info-dialog").close();
+        toast("目标已经更替，请重新选择。");
+      }
+    }
+    if (signature() !== lastSignature) render();
+  }, 500);
+})();

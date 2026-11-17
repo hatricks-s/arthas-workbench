@@ -19,6 +19,10 @@ This standalone workbench evolved from the author's `devops-toolkit` and `arthas
 
 Any future migration of source or assets from another repository must preserve required copyright and license notices. Do not infer that a directory is freely redistributable merely because it is locally available.
 
+## Bundled font
+
+The offline design prototype bundles **DM Sans** from [Google Fonts](https://github.com/google/fonts/tree/main/ofl/dmsans), licensed under the SIL Open Font License 1.1. The unmodified variable font and its full copyright/license notice are distributed in `ui-prototype/fonts/` and copied to `docs/preview/fonts/`. The font is served locally; the preview does not request fonts from a third-party service. Chinese glyphs use the reader's installed fonts.
+
 ## Names and screenshots
 
 Arthas, Kubernetes and other product names remain the property of their respective owners. This is an independent community project, not an official Alibaba or Kubernetes product. Screenshots and static preview data in this repository were produced from simulated targets; no customer environments or credentials are included.
