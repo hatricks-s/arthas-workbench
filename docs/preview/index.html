@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Arthas Workbench · 连接工作台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./mock.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <div role="note" style="padding:12px 24px;background:#e5f0eb;color:#204e3d;font:13px/1.6 sans-serif;border-bottom:1px solid #b7cec1"><strong>交互原型 · 模拟数据</strong> — 此页面不访问本机进程、不连接集群、不执行诊断。请审查布局与操作流程。 <a href="https://github.com/yy568821795-max/arthas-workbench" style="color:inherit">项目说明</a></div>
+  <header class="topbar"><a class="brand" href="./index.html" aria-label="Arthas Workbench 首页"><span class="brand-symbol" aria-hidden="true">a/</span><strong>Arthas <span>Workbench</span></strong></a><div class="header-actions"><span class="tag">双链路原型</span><button id="theme" class="quiet" aria-label="切换明暗主题">切换主题</button></div></header>
+  <main>
+    <section id="login" class="login">
+      <p class="eyebrow">JAVA DIAGNOSTICS / ONE ENDPOINT</p>
+      <h1>连接目标，开始诊断。</h1>
+      <p class="intro">在同一个工作台访问 K8s 与本机 Java。连接器主动接入，MCP 客户端通过统一地址调用。</p>
+      <form id="login-form"><label for="token">访问令牌</label><div class="login-row"><input id="token" type="password" autocomplete="off" required placeholder="输入服务配置中的用户令牌"><button class="primary" type="submit">进入工作台 <span aria-hidden="true">→</span></button></div><p class="hint">令牌只保留在当前页面内存中，刷新后需重新输入。</p></form>
+      <div class="login-note"><strong>先连接节点，再连接 JVM</strong><p>启动连接器并登记目标后，这里会显示可用实例。原型仅展示当前账户有权访问的节点。</p></div>
+    </section>
+    <section id="workspace" hidden>
+      <div class="page-heading"><div><p class="eyebrow">CONNECTION WORKSPACE</p><h1>诊断连接</h1><p class="subtitle">选择实例，检查链路，然后在这里或 MCP 客户端中调用。</p></div><div class="heading-actions"><span id="account"></span><button id="refresh">刷新连接</button><button id="logout" class="quiet">退出</button></div></div>
+      <div class="workbench-grid">
+        <aside class="panel targets"><div class="panel-title"><h2>目标实例</h2><span id="sync-state" class="subtle" aria-live="polite">正在同步</span></div><div id="target-list"></div><div class="node-section"><h3>执行节点</h3><div id="node-list"></div></div></aside>
+        <section class="panel detail"><div id="no-selection" class="empty"><span class="empty-mark" aria-hidden="true">⌘</span><h2>等待连接器接入</h2><p>运行连接器后选择一个实例。<br>本机目标需要已运行的 Arthas，或显式启用 Attach。</p></div>
+          <div id="selection" hidden>
+            <div class="detail-heading"><div><p id="target-kind" class="eyebrow"></p><h2 id="target-name"></h2><code id="target-id"></code></div><span id="target-status" class="status"></span></div>
+            <p id="target-detail" class="target-message"></p>
+            <div class="action-row"><button id="probe" class="primary">检查连接</button><button id="scan">扫描 Java 进程</button></div>
+            <div id="processes" hidden><h3>本机 Java 进程</h3><label for="pid">目标进程</label><select id="pid"></select><button id="attach" class="danger">Attach 到选中进程</button><p class="hint">仅在连接器开启 Attach 且当前账户拥有权限时可用。执行前将再次核对进程身份。</p></div>
+            <hr><form id="diagnose-form"><div class="section-heading"><h3>运行诊断</h3><span class="subtle">与 MCP 共用调用链路</span></div><div class="form-row"><div><label for="tool">诊断工具</label><select id="tool"><option value="jvm">JVM 信息</option><option value="memory">内存信息</option><option value="thread">线程信息</option><option value="version">Arthas 版本</option><option value="trace">Trace 方法调用</option><option value="watch">Watch 方法结果</option></select></div><button id="run" type="submit" class="primary">运行诊断</button></div><div id="trace-fields" hidden><div class="form-row"><div><label for="class-pattern">类名</label><input id="class-pattern" placeholder="com.example.OrderService"></div><div><label for="method-pattern">方法名</label><input id="method-pattern" value="*"></div><div class="timeout-field"><label for="timeout">等待时间（秒）</label><input id="timeout" type="number" value="30" min="1" max="300"></div></div><p class="hint">Trace / Watch 需要目标方法实际执行才有结果，最长等待 300 秒。</p></div></form>
+            <section class="results"><div class="section-heading"><h3>调用结果</h3><div><span id="job-state" class="subtle" aria-live="polite">尚未执行</span><button id="cancel" class="quiet" hidden>取消等待</button></div></div><pre id="result" tabindex="0">选择工具后运行，结果会显示在这里。</pre></section>
+          </div>
+        </section>
+      </div>
+      <section class="mcp-panel"><div><p class="eyebrow">MCP / STREAMABLE HTTP</p><h2>把诊断接入你的客户端</h2><p>选择 Streamable HTTP，配置以下地址，并通过 Authorization 请求头传入自己的 Bearer 令牌。</p></div><div class="endpoint"><label for="mcp-url">统一 MCP 地址</label><div><input id="mcp-url" readonly><button id="copy">复制地址</button></div><p class="hint">先调用 list_instances，然后使用明确的 instance_id。</p></div></section>
+    </section>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+  </main>
+  <footer><span>Arthas Workbench</span><span>界面审查专用 · 全部操作与结果均为模拟</span></footer>
+</body></html>

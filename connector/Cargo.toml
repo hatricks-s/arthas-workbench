@@ -1,0 +1,38 @@
+[package]
+name = "arthas-connector"
+version = "0.1.0"
+edition = "2021"
+publish = false
+autotests = false
+
+[features]
+test-fixtures = []
+
+[[bin]]
+name = "connector-test-tool"
+path = "tests/fake_tool.rs"
+required-features = ["test-fixtures"]
+test = false
+
+[[test]]
+name = "connector"
+path = "tests/connector.rs"
+required-features = ["test-fixtures"]
+
+[dependencies]
+base64 = "0.22"
+futures-util = { version = "0.3", features = ["sink"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "process", "signal", "time", "sync", "io-util", "fs"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio-util = "0.7"
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

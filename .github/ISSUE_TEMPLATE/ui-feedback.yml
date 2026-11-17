@@ -1,0 +1,33 @@
+name: UI / interaction feedback
+description: Review the prototype's layout, usability, or onboarding flow.
+title: "[UI] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: "中文或 English 均可。预览使用模拟数据；请勿上传真实凭证、客户数据或私有目标信息。"
+  - type: input
+    id: page
+    attributes:
+      label: Page or feature / 页面或功能
+      placeholder: "目标列表 / 本机进程选择 / MCP 接入"
+    validations:
+      required: true
+  - type: input
+    id: viewport
+    attributes:
+      label: Device, viewport and theme / 设备、尺寸、主题
+      placeholder: "Windows, 1440×900, dark"
+  - type: textarea
+    id: observed
+    attributes:
+      label: What feels wrong / 遇到的问题
+      description: "Describe the steps and what you saw. Sanitized screenshots are welcome."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Desired experience / 期望如何改进
+    validations:
+      required: true

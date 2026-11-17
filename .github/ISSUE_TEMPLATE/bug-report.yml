@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a reproducible runtime or protocol defect.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "For security issues, use Security > Report a vulnerability. Do not post credentials or real kubeconfig."
+  - type: input
+    id: revision
+    attributes:
+      label: Commit or version
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS, Python, Rust, JDK and Arthas versions
+    validations:
+      required: true
+  - type: dropdown
+    id: route
+    attributes:
+      label: Connection route
+      options: ["Static preview", "Local connector", "Kubernetes connector", "MCP gateway", "Other"]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: "Prefer the disposable mock fixtures. Include expected and actual behavior."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: "Remove tokens, internal hosts, customer names and private data."
