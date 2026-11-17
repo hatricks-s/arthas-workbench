@@ -77,6 +77,7 @@ function showPage(next) {
     else button.removeAttribute('aria-current');
   });
   if (page === 'history') renderHistory();
+  window.scrollTo(0, 0);
 }
 all('[data-page]').forEach(button => { button.onclick = () => showPage(button.dataset.page); });
 
