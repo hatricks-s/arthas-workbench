@@ -18,7 +18,7 @@ dependencies = [
   "httpx==0.28.1",
   "starlette==0.47.2",
   "uvicorn==0.35.0",
-  "websockets==15.0.1",
+  "websockets==17.4",
   "pydantic==2.11.7",
   "pydantic-settings==2.10.1",
 ]
