@@ -1,4 +1,4 @@
-/* Design prototype only. No fetch, credentials, real JVMs or Kubernetes access. */
+/* Offline design prototype. No process, cluster, model provider or MCP network access. */
 (() => {
   "use strict";
   const $ = (selector) => document.querySelector(selector);
@@ -6,107 +6,150 @@
   const escape = (value) =>
     String(value ?? "").replace(
       /[&<>"']/g,
-      (character) =>
+      (c) =>
         ({
           "&": "&amp;",
           "<": "&lt;",
           ">": "&gt;",
           '"': "&quot;",
           "'": "&#39;",
-        })[character],
+        })[c],
     );
   const icon = (name, small = false) =>
     `<svg class="icon${small ? " small" : ""}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const tools = {
     trace: ["方法追踪", "拆解一次方法调用，定位耗时发生在哪里。", "layers"],
     watch: ["方法观测", "观察方法执行时的入参、返回值与异常。", "search"],
-    thread: ["线程分析", "查看活跃线程及调用栈，找到阻塞与热点。", "activity"],
+    thread: ["线程分析", "查看线程与调用栈，定位阻塞和热点。", "activity"],
     jvm: ["JVM 信息", "查看当前 Java 进程的运行信息。", "server"],
-    memory: ["内存概览", "查看堆、元空间与直接内存的使用情况。", "grid"],
-    ognl: ["表达式求值", "展示结构化求值结果，原型不会执行表达式。", "code"],
+    memory: ["内存概览", "查看堆、元空间与直接内存。", "grid"],
+    ognl: ["表达式求值", "结构化求值结果；原型不会执行表达式。", "code"],
     sc: ["类检查", "查看已加载的类、类加载器与代码来源。", "file"],
     profiler: ["性能采样", "按采样占比查看调用热点。", "clock"],
-  };
-  const labels = {
-    orders: "订单服务",
-    payments: "支付服务",
-    inventory: "库存服务",
-    gateway: "API 网关",
   };
   const channelNames = {
     ready: ["已连接", "green"],
     reconnecting: ["重连中", "amber"],
     discovered: ["待接入", "gray"],
+    offline: ["助手离线", "gray"],
     retired: ["已替换", "red"],
   };
   const taskNames = {
+    queued: ["排队中", "gray"],
     running: ["进行中", "blue"],
     succeeded: ["已完成", "green"],
+    partial: ["部分完成", "amber"],
     cancelled: ["已取消", "gray"],
     interrupted: ["已中断", "red"],
   };
+  const active = (task) => ["queued", "running"].includes(task.status);
   const store = window.WorkbenchDemo.createStore();
   const state = store.state;
   let page = "workspace",
     environment = "production",
-    app = "orders",
+    workload = "all",
+    namespace = "all",
+    node = "all",
     tab = "instances",
-    tool = "trace";
-  let selected = store.listPods(environment, app)[0].key;
-  let checked = new Set(),
-    selectionByContext = new Map(),
+    tool = "trace",
+    pageIndex = 0;
+  const PAGE_SIZE = 8;
+  let selected = store.listPods(environment)[0]?.key,
+    checked = new Set(),
+    remembered = new Map(),
     taskByTool = new Map();
-  let taskDetail = null,
+  let runDetail = null,
+    taskDetail = null,
     dialogTargets = [],
+    dialogSource = "web",
+    pendingConnection = null,
     toastTimer,
-    lastSignature = "",
-    pendingConnection = null;
-  const context = () =>
-    page === "local" ? ["local", "local"] : [environment, app];
-  const currentPods = () => store.listPods(...context());
+    lastSignature = "";
+  const envFor = (id) => state.environments.find((item) => item.id === id);
+  const currentEnvironment = () => envFor(environment);
+  const isLocal = () => currentEnvironment()?.kind === "local";
+  const environmentName = (id) => envFor(id)?.name || id;
   const podFor = (key) => state.pods.find((pod) => pod.key === key);
   const selectedPod = () => podFor(selected);
-  const environmentName = (id) =>
-    state.environments.find((item) => item.id === id)?.name || "本机环境";
-  const appName = (id) =>
-    state.apps.find((item) => item.id === id)?.name || "本机 Java 进程";
+  const allPods = () => store.listPods(environment);
+  const inScope = (target) =>
+    target.environment === environment &&
+    (workload === "all" || target.app === workload) &&
+    (namespace === "all" || target.namespace === namespace) &&
+    (node === "all" || target.node === node);
+  const currentPods = () => allPods().filter(inScope);
   const date = (value) =>
-    new Intl.DateTimeFormat("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).format(new Date(value));
+    value == null
+      ? "—"
+      : new Intl.DateTimeFormat("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }).format(new Date(value));
   const status = (value, kind = "channel") => {
     const [label, color] = (kind === "task" ? taskNames : channelNames)[
       value
     ] || [value, "gray"];
     return `<span class="status ${color}">${label}</span>`;
   };
-  const appTasks = () => {
-    const [env, application] = context();
-    return state.tasks.filter(
-      (task) =>
-        task.target.environment === env && task.target.app === application,
+  const badge = (source) =>
+    `<span class="source-badge ${source === "mcp" ? "mcp" : ""}">${icon(source === "mcp" ? "code" : "monitor", true)}${source === "mcp" ? "MCP" : "Web"}</span>`;
+  const scopeLabel = (target) =>
+    target.kind === "local"
+      ? `PID ${target.pid}`
+      : `${target.namespace} / ${target.workloadName || target.appName || target.app}`;
+  const runTasks = (run) =>
+    run.taskIds
+      .map((id) => state.tasks.find((task) => task.id === id))
+      .filter(Boolean);
+  const scopeRuns = () =>
+    state.runs.filter((run) =>
+      runTasks(run).some((task) => inScope(task.target)),
     );
-  };
   const visiblePods = () =>
     currentPods().filter((pod) => {
       const query = $("#pod-search").value.trim().toLowerCase();
       return (
         (!query ||
-          `${pod.name} ${pod.node} ${pod.pid}`.toLowerCase().includes(query)) &&
+          `${pod.name} ${pod.namespace} ${pod.workloadName} ${pod.node} ${pod.pid}`
+            .toLowerCase()
+            .includes(query)) &&
         ($("#channel-filter").value === "all" ||
           pod.channel === $("#channel-filter").value)
       );
     });
+  const groupValue = (pod) => {
+    const mode = $("#node-group").value;
+    return mode === "namespace"
+      ? pod.namespace
+      : mode === "workload"
+        ? `${pod.namespace} / ${pod.workloadName}`
+        : mode === "node"
+          ? pod.node
+          : "";
+  };
+  function orderedPods() {
+    const pods = visiblePods();
+    return $("#node-group").value === "none"
+      ? pods
+      : [...pods].sort((a, b) =>
+          String(groupValue(a)).localeCompare(String(groupValue(b))),
+        );
+  }
+  function pagePods() {
+    const pods = orderedPods();
+    pageIndex = Math.min(
+      pageIndex,
+      Math.max(0, Math.ceil(pods.length / PAGE_SIZE) - 1),
+    );
+    return pods.slice(pageIndex * PAGE_SIZE, (pageIndex + 1) * PAGE_SIZE);
+  }
   function toast(message) {
     clearTimeout(toastTimer);
     $("#toast").textContent = message;
     $("#toast").hidden = false;
-    toastTimer = setTimeout(() => {
-      $("#toast").hidden = true;
-    }, 4500);
+    toastTimer = setTimeout(() => ($("#toast").hidden = true), 4500);
   }
   const narrowNavigation = matchMedia("(max-width: 820px)");
   function syncNavigation() {
@@ -115,156 +158,255 @@
     $(".shell").inert = narrowNavigation.matches && open;
   }
   function closeNavigation() {
-    const hadFocus = $("#sidebar").contains(document.activeElement);
+    const focused = $("#sidebar").contains(document.activeElement);
     $("#sidebar").classList.remove("open");
     $("#nav-scrim").hidden = true;
     $("#mobile-menu").setAttribute("aria-expanded", "false");
     syncNavigation();
-    if (hadFocus && narrowNavigation.matches) $("#mobile-menu").focus();
+    if (focused && narrowNavigation.matches) $("#mobile-menu").focus();
   }
-  narrowNavigation.addEventListener("change", () => {
-    closeNavigation();
-    syncNavigation();
-  });
-  function resetSelection() {
-    const key = context().join("/");
-    const remembered = selectionByContext.get(key);
-    selected = currentPods().some((pod) => pod.key === remembered)
-      ? remembered
-      : currentPods()[0]?.key;
+  narrowNavigation.addEventListener("change", closeNavigation);
+  function clearFilters() {
+    workload = "all";
+    namespace = "all";
+    node = "all";
+    pageIndex = 0;
     checked.clear();
     $("#pod-search").value = "";
     $("#channel-filter").value = "all";
+    $("#node-group").value = "none";
   }
-  function showPage(next) {
-    if (page === "workspace" || page === "local")
-      selectionByContext.set(context().join("/"), selected);
-    page = next;
-    if (
-      (page === "workspace" || page === "local") &&
-      !currentPods().some((pod) => pod.key === selected)
-    )
-      resetSelection();
-    if (page === "workspace" || page === "local") tab = "instances";
+  function reconcileSelection() {
+    const list = visiblePods();
+    if (!list.some((pod) => pod.key === selected))
+      selected =
+        list.find((pod) => pod.key === remembered.get(environment))?.key ||
+        list[0]?.key;
+  }
+  function changeEnvironment(id) {
+    if (!envFor(id)) return;
+    remembered.set(environment, selected);
+    environment = id;
+    clearFilters();
+    selected = remembered.get(id);
+    reconcileSelection();
+    page = "workspace";
+    tab = "instances";
     closeNavigation();
     render();
     window.scrollTo({ top: 0, behavior: "instant" });
   }
+  function showPage(next) {
+    page = next;
+    closeNavigation();
+    render();
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+  function scopeChanged() {
+    checked.clear();
+    pageIndex = 0;
+    reconcileSelection();
+    render();
+  }
+  function options(items, value) {
+    return items
+      .map(
+        ([id, label]) =>
+          `<option value="${escape(id)}" ${id === value ? "selected" : ""}>${escape(label)}</option>`,
+      )
+      .join("");
+  }
+  function workloadOptions() {
+    const map = new Map();
+    allPods()
+      .filter((p) => namespace === "all" || p.namespace === namespace)
+      .forEach((p) =>
+        map.set(p.app, {
+          id: p.app,
+          name: p.workloadName || p.name,
+          namespace: p.namespace,
+          kind: p.workloadKind || "Deployment",
+        }),
+      );
+    return [...map.values()];
+  }
   function renderNavigation() {
     $$("[data-page]").forEach((button) => {
-      const active = button.dataset.page === page;
-      button.classList.toggle("active", active);
-      if (active) button.setAttribute("aria-current", "page");
+      const yes = button.dataset.page === page;
+      button.classList.toggle("active", yes);
+      if (yes) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
-    $("#app-navigation").hidden = !["workspace"].includes(page);
     $("#environment").value = environment;
     $(".environment-control").dataset.env = environment;
-    const query = $("#app-search").value.toLowerCase().trim();
-    $("#app-list").innerHTML =
-      state.apps
-        .filter((item) =>
-          `${item.name} ${item.description}`.toLowerCase().includes(query),
-        )
-        .map(
-          (item) =>
-            `<button class="app-link${item.id === app ? " active" : ""}" data-app="${item.id}"${item.id === app ? ' aria-current="true"' : ""}><span class="app-indicator"></span><span>${escape(item.name)}</span><span class="app-quantity">${store.listPods(environment, item.id).length}</span></button>`,
-        )
-        .join("") || '<div class="empty-state compact">没有匹配的应用</div>';
-    const count = state.tasks.filter(
-      (task) => task.status === "running",
+    $("#environment-count").textContent = state.environments.length;
+    $("#app-navigation").hidden = page !== "workspace";
+    $("#all-targets-count").textContent = allPods().length;
+    $("#all-targets-view").classList.toggle(
+      "active",
+      workload === "all" && namespace === "all" && node === "all",
+    );
+    $("#sidebar-context-note").textContent = isLocal()
+      ? "一台已配对设备，一个本机环境。仅运行中的 JVM 是诊断目标。"
+      : "一个集群，一个环境。Namespace 与工作负载是筛选条件。";
+    $("#app-search").parentElement.hidden = isLocal();
+    const query = $("#app-search").value.trim().toLowerCase();
+    $("#app-list").innerHTML = isLocal()
+      ? `<div class="device-info">${icon("monitor")}<span>${escape(currentEnvironment().device)}<small>${currentEnvironment().online === false ? "助手离线 · 保留上次清单" : "助手在线 · 模拟"}</small></span></div>`
+      : workloadOptions()
+          .filter((w) =>
+            `${w.name} ${w.namespace}`.toLowerCase().includes(query),
+          )
+          .map(
+            (w) =>
+              `<button class="app-link${workload === w.id ? " active" : ""}" data-workload="${escape(w.id)}"><span class="app-indicator"></span><span class="workload-nav-name">${escape(w.name)}<small>${escape(w.namespace)} · ${escape(w.kind)}</small></span><span class="app-quantity">${allPods().filter((p) => p.app === w.id).length}</span></button>`,
+          )
+          .join("") ||
+        '<div class="empty-state compact">没有匹配的工作负载</div>';
+    $("#global-task-count").textContent = state.runs.filter(
+      (run) => store.runSummary(run.id).status === "running",
     ).length;
-    $("#global-task-count").textContent = count;
     $("#breadcrumb-context").textContent =
-      page === "local"
-        ? "我的电脑"
-        : page === "workspace"
-          ? environmentName(environment)
-          : "团队工作空间";
+      page === "workspace" ? environmentName(environment) : "团队工作空间";
     $("#breadcrumb-page").textContent = {
-      workspace: labels[app],
-      local: "Java 进程",
+      workspace: isLocal() ? "Java 进程" : "诊断目标",
       tasks: "诊断任务",
       mcp: "MCP 接入",
       settings: "资源与执行节点",
     }[page];
-    for (const id of ["workspace", "tasks", "mcp", "settings"])
-      $(`#${id}-page`).hidden =
-        id === "workspace"
-          ? !["workspace", "local"].includes(page)
-          : page !== id;
+    ["workspace", "tasks", "mcp", "settings"].forEach(
+      (id) => ($(`#${id}-page`).hidden = page !== id),
+    );
   }
   function renderHeading() {
-    const local = page === "local";
-    const application = state.apps.find((item) => item.id === app);
-    const env = state.environments.find((item) => item.id === environment);
-    $("#application-category").textContent = local
-      ? "LOCAL / 我的电脑"
-      : `APPLICATION / ${labels[app]}`;
-    $("#application-name").textContent = local
-      ? "本机 Java 进程"
-      : application.name;
-    $("#application-description").textContent = local
-      ? "通过本机助手发现进程，与集群诊断共用工作区。"
-      : application.description;
-    $("#application-meta").innerHTML = local
-      ? `<span>${icon("monitor")}demo-workstation</span><span class="meta-divider"></span><span>${icon("link")}本机助手在线 · 模拟</span><span class="meta-divider"></span><span>仅当前用户的演示进程</span>`
-      : `<span>${icon("layers")}${escape(env.cluster)}</span><span class="meta-divider"></span><span>${icon("box")}${escape(env.namespace)}</span><span class="meta-divider"></span><span class="meta-badge">Java ${escape(application.javaVersion)}</span><span class="meta-owner">${escape(application.owner)}</span>`;
-    $("#instance-column-title").textContent = local
+    const env = currentEnvironment(),
+      pods = allPods(),
+      ready = pods.filter((p) => p.channel === "ready").length;
+    $("#application-category").textContent = isLocal()
+      ? "LOCAL DEVICE / 本机环境"
+      : "KUBERNETES / 集群环境";
+    $("#application-name").textContent = env.name;
+    $("#application-description").textContent = isLocal()
+      ? "在已配对设备中发现 Java 进程，通过同一入口完成诊断。"
+      : "发现集群中的 Java 目标，维护通道，让 Web 与 AI 共用诊断能力。";
+    $("#application-meta").innerHTML = isLocal()
+      ? `<span>${icon("monitor")}${escape(env.device)}</span><span class="meta-divider"></span><span>${icon("link")}${env.online === false ? "助手离线" : "助手在线"} · 模拟</span>`
+      : `<span>${icon("layers")}${escape(env.cluster)}</span><span class="meta-divider"></span><span>${icon("box")}${new Set(pods.map((p) => p.namespace)).size} 个 Namespace</span><span class="meta-divider"></span><span>${new Set(pods.map((p) => p.app)).size} 个工作负载</span><span class="meta-badge">Java 诊断范围</span>`;
+    $("#environment-access").innerHTML =
+      `<div>${icon("code")}<span><strong>${ready} / ${pods.length} 个目标可通过 MCP 诊断</strong><small>${isLocal() && env.online === false ? "设备离线，不能扫描、连接或执行任务。" : "可用状态由诊断通道决定；发现目标不会自动 Attach。"} · 全部模拟</small></span></div><button class="text-button" id="environment-mcp-demo" ${ready ? "" : "disabled"}>体验多目标调用 ${icon("arrow", true)}</button>`;
+    $("#scope-filters").hidden = isLocal();
+    const namespaces = [...new Set(pods.map((p) => p.namespace))].filter(
+      Boolean,
+    );
+    $("#namespace-filter").innerHTML = options(
+      [["all", "全部 Namespace"], ...namespaces.map((id) => [id, id])],
+      namespace,
+    );
+    $("#workload-filter").innerHTML = options(
+      [
+        ["all", "全部工作负载"],
+        ...workloadOptions().map((w) => [w.id, `${w.name} · ${w.namespace}`]),
+      ],
+      workload,
+    );
+    $("#node-filter").innerHTML = options(
+      [
+        ["all", "全部 Node"],
+        ...[
+          ...new Set(
+            pods
+              .filter(
+                (p) =>
+                  (namespace === "all" || p.namespace === namespace) &&
+                  (workload === "all" || p.app === workload),
+              )
+              .map((p) => p.node),
+          ),
+        ].map((id) => [id, id]),
+      ],
+      node,
+    );
+    $("#instance-column-title").textContent = isLocal()
       ? "进程 / JVM"
-      : "实例 / POD";
-    $("#local-scan-button").hidden = !local;
-    $("#refresh-button").title = local ? "扫描模拟 Java 进程" : "刷新模拟实例";
+      : "Pod / JVM 目标";
+    $("#scope-column-title").textContent = isLocal()
+      ? "设备 / 执行器"
+      : "Namespace / 工作负载";
+    $("#local-scan-button").hidden = !isLocal();
+    $("#local-scan-button").disabled = env.online === false;
+    $("#refresh-button").title = isLocal()
+      ? "扫描模拟 Java 进程"
+      : "刷新模拟目标";
     $("#refresh-button").setAttribute("aria-label", $("#refresh-button").title);
+    $("#refresh-button").disabled = isLocal() && env.online === false;
+    $("#node-group").disabled = isLocal();
+    $("#policy-button").disabled =
+      !currentPods().length || env.online === false;
+    $("#diagnose-button").disabled =
+      !selectedPod() ||
+      selectedPod().retired ||
+      selectedPod().channel === "offline";
     $("#pod-count").textContent = currentPods().length;
-    $("#app-task-count").textContent = appTasks().length;
+    $("#app-task-count").textContent = scopeRuns().length;
     $$(".section-tabs>[data-tab]").forEach((button) => {
-      const active = button.dataset.tab === tab;
-      button.setAttribute("aria-selected", active);
-      button.tabIndex = active ? 0 : -1;
+      const yes = button.dataset.tab === tab;
+      button.setAttribute("aria-selected", yes);
+      button.tabIndex = yes ? 0 : -1;
     });
     $("#instances-panel").hidden = tab !== "instances";
     $("#application-tasks-panel").hidden = tab !== "tasks";
     $("#events-panel").hidden = tab !== "events";
+    $("#diagnostic-workspace").hidden = tab !== "instances" || !selectedPod();
   }
   function renderPods() {
-    let pods = visiblePods();
-    const grouped = $("#node-group").value === "node";
-    if (grouped) pods = [...pods].sort((a, b) => a.node.localeCompare(b.node));
-    let previousNode;
+    const pods = pagePods(),
+      filtered = visiblePods();
+    let previous;
     $("#pod-rows").innerHTML =
       pods
         .map((pod) => {
-          let group = "";
-          if (grouped && pod.node !== previousNode) {
-            group = `<tr class="group-row"><td colspan="7">${escape(pod.node)} · ${pods.filter((item) => item.node === pod.node).length} 个实例</td></tr>`;
-            previousNode = pod.node;
+          const group = groupValue(pod);
+          let groupRow = "";
+          if (group && group !== previous) {
+            groupRow = `<tr class="group-row"><td colspan="7">${escape(group)}</td></tr>`;
+            previous = group;
           }
           const running = state.tasks.filter(
-            (task) => task.target.key === pod.key && task.status === "running",
+            (task) => task.target.key === pod.key && active(task),
           ).length;
-          return `${group}<tr class="${pod.key === selected ? "selected" : ""}" data-pod-row="${escape(pod.key)}"><td class="selection-cell"><input type="checkbox" data-select-pod="${escape(pod.key)}" aria-label="选择 ${escape(pod.name)}" ${checked.has(pod.key) ? "checked" : ""} ${pod.channel !== "ready" ? "disabled" : ""}></td><td><button class="pod-name-button" data-select="${escape(pod.key)}" aria-label="查看 ${escape(pod.name)} 的诊断工作区">${icon(pod.kind === "local" ? "monitor" : "box")}<span>${escape(pod.name)}</span></button><div class="pod-secondary"><span>${pod.kind === "local" ? `PID ${pod.pid}` : escape(pod.container)}</span><span class="tiny-separator"></span><span>${escape(pod.age)}</span><span class="tiny-separator"></span><span>代次 ${pod.generation}</span></div></td><td><span class="node-label">${icon(pod.kind === "local" ? "monitor" : "server")}${escape(pod.node)}</span></td><td><span class="running-state"><span class="status-dot green"></span>Running</span></td><td>${status(pod.channel)}</td><td><span class="task-cell${running ? " active" : ""}">${running ? icon("activity") : ""}${running ? `${running} 进行中` : "—"}</span></td><td><button class="row-action" data-${pod.channel === "ready" ? "diagnose" : "connect"}="${escape(pod.key)}">${pod.channel === "ready" ? "诊断" : "连接"}${icon("arrow", true)}</button></td></tr>`;
+          return `${groupRow}<tr class="${pod.key === selected ? "selected" : ""}" data-pod-row="${escape(pod.key)}"><td class="selection-cell"><input type="checkbox" data-select-pod="${escape(pod.key)}" aria-label="选择 ${escape(pod.namespace || environmentName(pod.environment))} / ${escape(pod.name)}" ${checked.has(pod.key) ? "checked" : ""} ${pod.channel !== "ready" ? "disabled" : ""}></td><td><button class="pod-name-button" data-select="${escape(pod.key)}" aria-label="查看 ${escape(pod.namespace || environmentName(pod.environment))} / ${escape(pod.name)}">${icon(pod.kind === "local" ? "monitor" : "box")}<span>${escape(pod.name)}</span></button><div class="pod-secondary"><span>${pod.kind === "local" ? `PID ${pod.pid}` : escape(pod.namespace)}</span><span class="tiny-separator"></span><span>g${pod.generation} · ${escape(pod.age)}</span>${running ? `<span class="pod-active-task">${running} 个任务</span>` : ""}</div></td><td><strong class="scope-cell">${escape(pod.kind === "local" ? currentEnvironment().device : pod.namespace)}</strong><small class="scope-workload">${escape(pod.kind === "local" ? pod.connector : pod.workloadName)}${pod.kind === "local" ? "" : ` · ${escape(pod.workloadKind || "Deployment")}`}</small></td><td><span class="node-label">${icon(pod.kind === "local" ? "monitor" : "server")}${escape(pod.node)}</span><small class="pod-readiness">${pod.channel === "offline" ? "上次发现" : pod.kind === "local" ? "进程在线" : `${pod.readyContainers}/${pod.containers.filter((c) => c.role !== "init").length} Ready`} · 重启 ${pod.restarts}</small></td><td>${status(pod.channel)}</td><td><span class="mcp-availability ${pod.channel === "ready" ? "available" : ""}">${pod.channel === "ready" ? icon("check", true) : "—"}${pod.channel === "ready" ? "可调用" : ""}</span></td><td><button class="row-action" data-${pod.channel === "ready" ? "diagnose" : "connect"}="${escape(pod.key)}" ${pod.channel === "offline" ? "disabled" : ""}>${pod.channel === "ready" ? "诊断" : pod.channel === "offline" ? "离线" : "连接"}${icon("arrow", true)}</button></td></tr>`;
         })
         .join("") ||
-      '<tr class="empty-row"><td colspan="7">没有匹配的实例。调整搜索内容或连接状态筛选。</td></tr>';
-    const ready = currentPods().filter((pod) => pod.channel === "ready").length;
-    const managed = currentPods().filter((pod) => pod.managed).length;
+      '<tr class="empty-row"><td colspan="7">没有匹配的目标。请调整 Namespace、工作负载或连接筛选。</td></tr>';
     $("#instance-summary").textContent =
-      `${pods.length} / ${currentPods().length} 个实例 · ${ready} 已连接 · ${managed} 已纳管${checked.size ? ` · 已选择 ${checked.size} 个` : ""}`;
+      `${filtered.length} 个匹配目标 · 本页 ${pods.length} 个${checked.size ? ` · 已选择 ${checked.size} 个` : ""}`;
+    $("#page-number").textContent =
+      `${pageIndex + 1} / ${Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))}`;
+    $("#previous-page").disabled = pageIndex === 0;
+    $("#next-page").disabled = (pageIndex + 1) * PAGE_SIZE >= filtered.length;
     $("#selected-diagnose").hidden = !checked.size;
-    $("#selected-diagnose").textContent = `诊断所选 ${checked.size} 个实例`;
-    const available = pods.filter((pod) => pod.channel === "ready");
+    $("#selected-diagnose").textContent = `诊断所选 ${checked.size} 个目标`;
+    const available = pods.filter((p) => p.channel === "ready");
     $("#select-all").checked =
-      available.length > 0 && available.every((pod) => checked.has(pod.key));
+      !!available.length && available.every((p) => checked.has(p.key));
     $("#select-all").indeterminate =
-      available.some((pod) => checked.has(pod.key)) &&
-      !$("#select-all").checked;
+      available.some((p) => checked.has(p.key)) && !$("#select-all").checked;
     $("#select-all").disabled = !available.length;
   }
   function renderEvents() {
-    const [env, application] = context();
     const events = state.events
-      .filter((event) => event.environment === env && event.app === application)
+      .filter((event) => {
+        const target = podFor(event.targetKey);
+        const eventNamespace =
+          target?.namespace ||
+          state.apps.find((item) => item.id === event.app)?.namespace;
+        return (
+          event.environment === environment &&
+          (workload === "all" || event.app === workload) &&
+          (namespace === "all" || eventNamespace === namespace) &&
+          (node === "all" || target?.node === node)
+        );
+      })
       .slice()
       .reverse();
     $("#connection-events").innerHTML =
@@ -274,26 +416,30 @@
             `<li><span class="event-dot ${escape(event.kind)}"></span><div><strong>${escape(event.title)}</strong><p>${escape(event.detail)}</p></div><time>${date(event.at)}</time></li>`,
         )
         .join("") ||
-      "<li><div><strong>暂无连接事件</strong><p>连接、重连、任务提交与实例替换都会记录在这里。</p></div></li>";
+      "<li><div><strong>暂无连接事件</strong><p>连接、重连、任务提交和实例更替都会记录在这里。</p></div></li>";
   }
-  function renderTasks(target, tasks) {
+  function renderRuns(target, runs) {
     $(target).innerHTML =
-      tasks
+      runs
         .slice()
         .reverse()
-        .map(
-          (task) =>
-            `<article class="task-list-row"><span class="task-list-icon">${icon(tools[task.tool][2])}</span><div><h3>${escape(tools[task.tool][0])} <span class="tool-code">${escape(task.tool)}</span></h3><p>${escape(task.target.name)} · g${task.target.generation} · ${escape(task.id.replace("demo-task-", "#"))}</p></div><span class="task-env">${escape(task.target.environmentName)}<br>${escape(task.target.appName)}</span><span class="task-status">${status(task.status, "task")}</span><time>${date(task.createdAt)}</time><div class="task-list-actions"><button class="text-button" data-open-task="${task.id}">查看</button>${task.status === "running" ? `<button class="text-button" data-cancel="${task.id}">取消</button>` : ""}</div></article>`,
-        )
+        .map((run) => {
+          const summary = store.runSummary(run.id),
+            tasks = runTasks(run),
+            first = tasks[0]?.target;
+          return `<article class="run-list-row"><span class="task-list-icon">${icon(tools[run.tool]?.[2] || "activity")}</span><div class="run-title"><button class="run-open" data-open-run="${escape(run.id)}">${escape(run.title)}</button><p>${escape(first?.environmentName || environmentName(first?.environment))} · ${summary.total} 个目标 · ${escape(run.tool)} · ${date(run.createdAt)}</p></div><div class="run-source">${badge(run.source)}<small>${escape(run.client)}</small></div><div class="run-progress">${status(summary.status, "task")}<small>${summary.completed} / ${summary.total} 已结束${summary.counts.queued ? ` · ${summary.counts.queued} 排队` : ""}</small></div><button class="text-button" data-open-run="${escape(run.id)}">查看批次 ${icon("arrow", true)}</button></article>`;
+        })
         .join("") ||
-      `<div class="empty-state compact">${icon("activity")}<h3>暂无匹配的诊断任务</h3><p>从实例发起诊断后，可以在这里跨环境追踪结果。</p></div>`;
+      '<div class="empty-state compact"><h3>暂无匹配的诊断批次</h3><p>从目标发起诊断，或体验 MCP 多目标调用。</p></div>';
   }
   function chosenTask() {
     const tasks = state.tasks.filter(
       (task) => task.target.key === selected && task.tool === tool,
     );
-    const id = taskByTool.get(`${selected}/${tool}`);
-    return tasks.find((task) => task.id === id) || tasks.at(-1);
+    return (
+      tasks.find((task) => task.id === taskByTool.get(`${selected}/${tool}`)) ||
+      tasks.at(-1)
+    );
   }
   function resultData(task) {
     const result = task.result;
@@ -313,7 +459,7 @@
         name: "虚拟机",
         javaVersion: "Java 版本",
         pid: "进程 PID",
-        application: "所属应用",
+        application: "所属工作负载",
         uptime: "运行时间",
         processors: "可用处理器",
         arguments: "启动参数",
@@ -332,95 +478,167 @@
         )
         .join("");
     if (task.tool === "profiler")
-      return `<div class="result-table-scroll"><table class="plain-table"><thead><tr><th>采样栈（模拟）</th><th>样本数</th><th>样本占比</th></tr></thead><tbody>${result.frames.map((row) => `<tr><td class="thread-name"><span class="tree-indent">${row.depth ? "　".repeat(row.depth - 1) + "└─" : ""}</span>${escape(row.name)}</td><td>${row.samples}</td><td>${row.percent}%</td></tr>`).join("")}</tbody></table></div>`;
+      return `<div class="result-table-scroll"><table class="plain-table"><thead><tr><th>采样栈（模拟）</th><th>样本数</th><th>占比</th></tr></thead><tbody>${result.frames.map((row) => `<tr><td class="thread-name"><span class="tree-indent">${row.depth ? "　".repeat(row.depth - 1) + "└─" : ""}</span>${escape(row.name)}</td><td>${row.samples}</td><td>${row.percent}%</td></tr>`).join("")}</tbody></table></div>`;
     return "";
   }
   function taskResult(task, standalone = false) {
-    const pod = podFor(task.target.key);
-    const target = task.target;
-    const targetLine = `<div class="result-target-line">${icon("box")}<span class="result-target-copy">${escape(target.environmentName)} / ${escape(target.name)} <span>· JVM g${target.generation}</span></span>${status(task.status, "task")}</div>`;
+    const pod = podFor(task.target.key),
+      target = task.target;
+    const header = `<div class="result-target-line">${badge(task.source)}<span class="result-target-copy">${escape(target.environmentName)} / ${escape(target.namespace || "本机")} / ${escape(target.name)} · JVM g${target.generation}</span>${status(task.status, "task")}</div>`;
     let content;
-    if (task.status === "running")
-      content = `<div class="state-message"><span class="spinner"></span><div><strong>${pod?.channel === "reconnecting" ? "通道恢复中，保留原任务身份" : ["trace", "watch"].includes(task.tool) ? "等待目标方法执行…" : "正在收集模拟诊断结果…"}</strong><span>模拟任务可独立运行，切换页面不会改变执行目标。</span></div><button class="button secondary" data-cancel="${task.id}">${icon("stop")}取消任务</button></div>`;
+    if (active(task))
+      content = `<div class="state-message"><span class="spinner"></span><div><strong>${task.status === "queued" ? "已排队，等待并发名额" : pod?.channel === "reconnecting" ? "通道恢复中，保留原任务身份" : ["trace", "watch"].includes(task.tool) ? "等待目标方法执行…" : "正在收集模拟诊断结果…"}</strong><span>可继续切换环境；此任务始终绑定当前 UID 和 JVM 代次。</span></div><button class="button secondary" data-cancel="${task.id}">${icon("stop")}取消</button></div>`;
     else if (task.status !== "succeeded")
-      content = `<div class="state-message">${icon(task.status === "interrupted" ? "info" : "stop")}<div><strong>${task.status === "interrupted" ? "任务已中断，未自动重放" : "模拟任务已取消"}</strong><span>${task.status === "interrupted" ? "实例已更替或等待超时。历史目标与代次保留，不能转移到新 JVM。" : "结果不会在取消后继续写入。真实任务停止仍需目标端确认。"}</span></div></div>`;
+      content = `<div class="state-message">${icon("info")}<div><strong>${task.status === "interrupted" ? "任务已中断，未自动重放" : "模拟任务已取消"}</strong><span>${task.status === "interrupted" ? "实例更替或等待超时。旧结果保留原目标，不能转移到新 JVM。" : "此子任务结束，其他目标不受影响。"}</span></div></div>`;
     else
-      content = `<div class="result-summary"><span class="sample-badge">模拟采样</span><span>${escape(task.result.summary.replace(/^模拟调用链：|^模拟线程快照：|^模拟 JVM 概览：/, ""))}</span></div>${resultData(task)}<div class="result-footnote"><span>${escape(task.id)} · ${date(task.finishedAt)} · 所有数值为示例</span><button class="text-button" data-raw="${task.id}" aria-expanded="false">原始结果 ${icon("code", true)}</button></div><pre class="raw-result" id="raw-${task.id}${standalone ? "-standalone" : ""}" hidden>${escape(JSON.stringify(task.result, null, 2))}</pre>`;
-    return `${targetLine}${content}`;
+      content = `<div class="result-summary"><span class="sample-badge">模拟采样</span><span>${escape(task.result.summary)}</span></div>${resultData(task)}<div class="result-footnote"><span>${escape(task.id)} · ${date(task.finishedAt)} · 示例数值</span><button class="text-button" data-raw="${task.id}" aria-expanded="false">原始结果 ${icon("code", true)}</button></div><pre class="raw-result" id="raw-${task.id}${standalone ? "-standalone" : ""}" hidden>${escape(JSON.stringify(task.result, null, 2))}</pre>`;
+    return `${header}${content}<button class="text-button result-run-link" data-open-run="${escape(task.runId)}">查看所属诊断批次 ${icon("arrow", true)}</button>`;
   }
   function renderResult() {
     const pod = selectedPod();
-    $("#diagnostic-workspace").hidden = !pod;
+    $("#diagnostic-workspace").hidden = !pod || tab !== "instances";
     if (!pod) return;
     $("#detail-pod").textContent = pod.name;
     $("#detail-subtitle").textContent =
-      `${environmentName(pod.environment)} / ${pod.kind === "local" ? `PID ${pod.pid}` : pod.node} · JVM g${pod.generation}${pod.retired ? " · 原实例已替换" : ""}`;
+      `${environmentName(pod.environment)} / ${scopeLabel(pod)} · JVM g${pod.generation}${pod.retired ? " · 原实例已替换" : ""}`;
     $$("[data-tool]").forEach((button) => {
-      const active = button.dataset.tool === tool;
-      button.classList.toggle("active", active);
-      button.setAttribute("aria-pressed", String(active));
+      const yes = button.dataset.tool === tool;
+      button.classList.toggle("active", yes);
+      button.setAttribute("aria-pressed", yes);
     });
-    const task = chosenTask();
-    const tasks = state.tasks.filter(
-      (item) => item.target.key === selected && item.tool === tool,
-    );
-    let content = `<div class="result-heading"><div><h2>${tools[tool][0]}<span class="tool-code">${tool}</span></h2><p>${tools[tool][1]}</p></div><div class="result-heading-actions">${task?.status === "succeeded" ? `<button class="text-button" data-copy-result="${task.id}">${icon("copy", true)}复制</button>` : ""}<button class="button secondary" data-diagnose="${escape(selected)}">${icon("play")}${pod.channel === "ready" ? "运行诊断" : "连接并诊断"}</button></div></div>`;
+    const task = chosenTask(),
+      tasks = state.tasks.filter(
+        (item) => item.target.key === selected && item.tool === tool,
+      );
+    let content = `<div class="result-heading"><div><h2>${tools[tool][0]}<span class="tool-code">${tool}</span></h2><p>${tools[tool][1]}</p></div><div class="result-heading-actions">${task?.status === "succeeded" ? `<button class="text-button" data-copy-result="${task.id}">${icon("copy", true)}复制</button>` : ""}<button class="button secondary" data-diagnose="${escape(selected)}" ${pod.retired || pod.channel === "offline" ? "disabled" : ""}>${icon("play")}${pod.channel === "ready" ? "运行诊断" : pod.channel === "offline" ? "设备离线" : "连接并诊断"}</button></div></div>`;
     if (tasks.length > 1)
-      content += `<div class="task-tabs" aria-label="该实例的历史任务">${tasks
+      content += `<div class="task-tabs">${tasks
         .slice(-6)
         .map(
           (item) =>
-            `<button class="task-tab${item.id === task?.id ? " active" : ""}" data-task-tab="${item.id}" aria-pressed="${item.id === task?.id}"><span class="status-dot ${item.status === "succeeded" ? "green" : item.status === "running" ? "amber" : ""}"></span>${escape(item.id.replace("demo-task-", "#"))} · ${date(item.createdAt)}</button>`,
+            `<button class="task-tab${item.id === task?.id ? " active" : ""}" data-task-tab="${item.id}" aria-pressed="${item.id === task?.id}">${badge(item.source)}${escape(item.id.replace("demo-task-", "#"))} · ${date(item.createdAt)}</button>`,
         )
         .join("")}</div>`;
     content += task
       ? taskResult(task)
-      : `<div class="empty-state">${icon(tools[tool][2])}<h3>${pod.retired ? "原实例已替换" : `在此实例上开始${tools[tool][0]}`}</h3><p>${pod.retired ? "历史任务仍绑定原 UID；请在上方选择新实例。" : pod.channel === "ready" ? "配置诊断参数，结果会按任务保留。示例操作不会影响真实进程。" : "通道尚未就绪。模拟连接完成后，可在此配置诊断。"}</p><button class="button primary" data-diagnose="${escape(selected)}" ${pod.retired ? "disabled" : ""}>${icon("play")}${pod.channel === "ready" ? "配置诊断" : "连接并诊断"}</button></div>`;
+      : `<div class="empty-state"><h3>${pod.retired ? "原实例已替换" : pod.channel === "offline" ? "本机助手离线" : `在此目标上开始${tools[tool][0]}`}</h3><p>${pod.channel === "offline" ? "保留上次发现的进程；助手上线前不接受诊断。" : "操作均为模拟，任务绑定具体容器、UID 与 JVM 代次。"}</p><button class="button primary" data-diagnose="${escape(selected)}" ${pod.retired || pod.channel === "offline" ? "disabled" : ""}>${icon("play")}${pod.channel === "ready" ? "配置诊断" : "连接并诊断"}</button></div>`;
     $("#result-content").innerHTML = content;
+  }
+  function comparison(task) {
+    if (!task.result)
+      return {
+        label: "—",
+        value:
+          task.status === "queued"
+            ? "尚未开始"
+            : task.status === "running"
+              ? "采集中"
+              : "无结果",
+      };
+    if (task.tool === "thread")
+      return {
+        label: "最高线程 CPU",
+        value: `${Math.max(...task.result.threads.map((t) => t.cpu))}%`,
+      };
+    if (task.tool === "trace")
+      return { label: "根调用耗时", value: `${task.result.trace[0]?.ms} ms` };
+    if (task.tool === "memory")
+      return { label: "Heap 已使用", value: task.result.memory[0]?.used };
+    if (task.tool === "watch")
+      return { label: "观测事件", value: `${task.result.samples.length} 条` };
+    if (task.tool === "jvm")
+      return { label: "Java 版本", value: task.result.jvm.javaVersion };
+    return { label: "诊断结果", value: "已返回" };
+  }
+  function renderRunDetail() {
+    const run = state.runs.find((item) => item.id === runDetail);
+    $("#run-detail").hidden = !run;
+    if (!run) return;
+    const summary = store.runSummary(run.id),
+      tasks = runTasks(run);
+    $("#run-detail").innerHTML =
+      `<div class="run-detail-heading"><div><div class="eyebrow">DIAGNOSTIC RUN / ${escape(run.id)}</div><h2>${escape(run.title)}</h2><p>${badge(run.source)} ${escape(run.client)} · ${summary.total} 个固定目标 · 最多同时执行 ${run.concurrency} 个</p></div><div class="run-heading-actions">${summary.status === "running" ? `<button class="button secondary" data-cancel-run="${run.id}">${icon("stop")}取消剩余任务</button>` : ""}<button class="icon-button" id="close-run-detail" aria-label="关闭批次详情">${icon("close")}</button></div></div><div class="run-counts">${status(summary.status, "task")}<span>完成 ${summary.counts.succeeded}</span><span>执行 ${summary.counts.running}</span><span>排队 ${summary.counts.queued}</span><span>取消 ${summary.counts.cancelled}</span><span>中断 ${summary.counts.interrupted}</span></div><div class="comparison-wrap"><table class="plain-table comparison-table"><thead><tr><th>目标 / Namespace</th><th>状态</th><th>结果摘要（模拟）</th><th>开始 / 结束</th><th>操作</th></tr></thead><tbody>${tasks
+        .map((task) => {
+          const metric = comparison(task);
+          return `<tr data-child-task="${task.id}"><td><strong>${escape(task.target.name)}</strong><small>${escape(task.target.environmentName)} / ${escape(task.target.namespace || "本机")} · g${task.target.generation}</small></td><td>${status(task.status, "task")}</td><td><strong>${escape(metric.value)}</strong><small>${escape(metric.label)}</small></td><td class="task-time">${date(task.startedAt)}<small>${date(task.finishedAt)}</small></td><td><button class="text-button" data-open-task="${task.id}">详情</button>${active(task) ? `<button class="text-button" data-cancel="${task.id}">取消</button>` : ""}</td></tr>`;
+        })
+        .join(
+          "",
+        )}</tbody></table></div><div class="run-detail-foot">结果保留各自采样时间与参数，不代表严格同步采样。MCP 只是调用来源；这里不会生成或伪造 AI 分析结论。<button class="text-button" data-run-parameters="${run.id}">查看参数快照 ${icon("code", true)}</button></div>`;
   }
   function renderAllTasks() {
     const query = $("#task-search").value.trim().toLowerCase(),
-      filter = $("#task-status-filter").value;
-    renderTasks(
+      filter = $("#task-status-filter").value,
+      source = $("#task-source-filter").value;
+    renderRuns(
       "#all-tasks",
-      state.tasks.filter(
-        (task) =>
-          (filter === "all" || task.status === filter) &&
+      state.runs.filter(
+        (run) =>
+          (filter === "all" || store.runSummary(run.id).status === filter) &&
+          (source === "all" || run.source === source) &&
           (!query ||
-            `${task.target.name} ${task.target.appName} ${task.target.environmentName} ${task.tool}`
+            `${run.title} ${run.tool} ${run.client} ${runTasks(run)
+              .map(
+                (t) =>
+                  `${t.target.name} ${t.target.namespace} ${t.target.environmentName}`,
+              )
+              .join(" ")}`
               .toLowerCase()
               .includes(query)),
       ),
     );
-    const task = state.tasks.find((task) => task.id === taskDetail);
+    renderRunDetail();
+    const task = state.tasks.find((item) => item.id === taskDetail);
     $("#task-result").hidden = !task;
     if (task)
       $("#task-result").innerHTML =
-        `<div class="result-heading"><div><h2>${tools[task.tool][0]}<span class="tool-code">${task.tool}</span></h2><p>此结果绑定提交时的目标，独立于当前导航环境。</p></div><button class="icon-button" id="close-task-result" aria-label="关闭任务结果">${icon("close")}</button></div><div class="task-result-label">${escape(task.target.podUid)} · ${escape(task.id)}</div>${taskResult(task, true)}`;
+        `<div class="result-heading"><div><h2>${tools[task.tool][0]}<span class="tool-code">${task.tool}</span></h2><p>按提交时的精确目标保存，独立于当前环境筛选。</p></div><button class="icon-button" id="close-task-result" aria-label="关闭任务结果">${icon("close")}</button></div><div class="task-result-label">${escape(task.target.podUid)} · ${escape(task.id)}</div>${taskResult(task, true)}`;
+  }
+  function renderMcp() {
+    const ready = state.pods.filter(
+      (p) => !p.retired && p.channel === "ready",
+    ).length;
+    $("#mcp-scope").innerHTML =
+      `${icon("link")}<span><strong>统一 MCP 入口 · Streamable HTTP</strong><small>${state.environments.length} 个环境，${ready} 个当前可诊断目标 · 全部为模拟</small><small>演示范围：${escape(environmentName(environment))} · ${checked.size ? `已选 ${checked.size} 个目标` : "当前筛选内最多 3 个已连接目标"}</small></span><span class="outline-label">示例服务，不可真实调用</span>`;
+    $("#mcp-environments").innerHTML =
+      `<table class="plain-table"><thead><tr><th>环境</th><th>类型</th><th>可调用 / 已发现</th><th>状态</th><th></th></tr></thead><tbody>${state.environments
+        .map((env) => {
+          const pods = store.listPods(env.id),
+            count = pods.filter((p) => p.channel === "ready").length;
+          return `<tr><td><strong>${escape(env.name)}</strong><small>${escape(env.cluster || env.device)}</small></td><td>${env.kind === "local" ? "本机设备" : "Kubernetes"}</td><td>${count} / ${pods.length}</td><td>${status(env.online === false ? "offline" : count ? "ready" : "discovered")}</td><td><button class="text-button" data-environment="${escape(env.id)}">查看目标 ${icon("arrow", true)}</button></td></tr>`;
+        })
+        .join("")}</tbody></table>`;
+    renderRuns(
+      "#mcp-recent",
+      state.runs.filter((run) => run.source === "mcp").slice(-4),
+    );
   }
   function signature() {
     return JSON.stringify([
       state.pods.map((p) => [p.key, p.channel, p.managed, p.retired]),
       state.tasks.map((t) => [t.id, t.status]),
-      state.events.length,
+      state.runs.map((r) => r.id),
+      state.events.map((e) => e.id),
       state.policies,
     ]);
   }
   function render() {
     renderNavigation();
-    if (page === "workspace" || page === "local") {
+    if (page === "workspace") {
       renderHeading();
       renderPods();
-      renderTasks("#application-tasks", appTasks());
+      renderRuns("#application-tasks", scopeRuns());
       renderEvents();
       renderResult();
     }
     if (page === "tasks") renderAllTasks();
+    if (page === "mcp") renderMcp();
     lastSignature = signature();
   }
   function selectPod(key) {
     selected = key;
-    selectionByContext.set(context().join("/"), key);
+    remembered.set(environment, key);
+    renderHeading();
     renderPods();
     renderResult();
   }
@@ -435,57 +653,82 @@
     if (!pod) return;
     const pairs = [
       ["环境", environmentName(pod.environment)],
-      ["应用", appName(pod.app)],
+      ["Namespace", pod.namespace || "不适用"],
+      ["工作负载", pod.workloadName || "本机进程"],
       ["实例名称", pod.name],
-      ["Pod / 进程 UID", pod.podUid],
+      ["目标 UID", pod.podUid],
+      ["容器实例", pod.containerId || pod.container],
+      ["JVM 身份", pod.jvmIdentity || `g${pod.generation} / PID ${pod.pid}`],
       ["JVM 代次", `g${pod.generation}`],
-      ["容器 / PID", `${pod.container} / ${pod.pid}`],
+      ["执行容器 / PID", `${pod.container} / ${pod.pid}`],
       ["K8s Node", pod.kind === "k8s" ? pod.node : "不适用"],
-      ["执行节点", pod.connector],
-      ["通道状态", channelNames[pod.channel][0]],
+      ["Connector", pod.connector],
+      ["诊断通道", channelNames[pod.channel][0]],
     ];
+    const containers = pod.containers || [];
     showInfo(
-      "实例身份",
-      `<dl class="identity-grid">${pairs.map(([key, value]) => `<dt>${key}</dt><dd>${escape(value)}</dd>`).join("")}</dl><div class="inline-note">同名实例重建后会生成新的 UID。已提交任务不会转移到新实例。</div>`,
+      "目标身份",
+      `<dl class="identity-grid">${pairs.map(([key, value]) => `<dt>${key}</dt><dd>${escape(value)}</dd>`).join("")}</dl>${containers.length ? `<div class="container-list"><h3>容器清单</h3>${containers.map((c) => `<div><strong>${escape(c.name)}</strong><span>${c.role === "init" ? "初始化容器 · 不作为 JVM 目标" : "应用容器"} · ${escape(c.state)}</span></div>`).join("")}</div>` : ""}<div class="inline-note">Pod 重建或 JVM 重启后，原任务保留旧身份。初始化容器不会被当成可诊断进程。</div>`,
       "TARGET IDENTITY",
     );
   }
   function openPolicy() {
-    const [env, application] = context();
-    const current = state.policies[`${env}/${application}`];
-    const options = [
-      [
-        "selected",
-        "维护已接入实例",
-        "已纳管的每个实例独立保活；新发现的副本等待明确接入。",
-      ],
-      [
-        "all",
-        "维护应用的全部副本",
-        "接入当前全部副本，并纳管之后发现的新副本。真实部署需配额和权限。",
-      ],
-      [
-        "discover",
-        "仅发现，不维护连接",
-        "停止此应用的连接维护。存在进行中任务时不可切换。",
-      ],
-    ];
+    const scoped = workloadOptions().filter(
+      (w) => workload === "all" || w.id === workload,
+    );
+    const candidates = isLocal()
+      ? [{ id: "local", name: currentEnvironment().device, namespace: "本机" }]
+      : scoped;
+    const choices = candidates.map((w) => [w.id, `${w.name} · ${w.namespace}`]);
+    if (!choices.length) {
+      toast("当前范围没有可维护的工作负载。");
+      return;
+    }
     showInfo(
       "连接维护策略",
-      `<p class="body-copy">${escape(environmentName(env))} / ${escape(appName(application))}</p><form id="policy-form">${options.map(([value, title, description]) => `<label class="policy-option"><input type="radio" name="policy" value="${value}" ${value === current ? "checked" : ""}><span><strong>${title}</strong><p>${description}</p></span></label>`).join("")}<div class="inline-note">当前保活和恢复均在浏览器中模拟。正式产品由后台维护，不依赖网页是否打开。</div><p id="policy-error" class="form-error" role="alert"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close>取消</button><button class="button primary" type="submit">应用模拟策略</button></div></form>`,
+      `<p class="body-copy">${escape(environmentName(environment))} · 策略按工作负载／设备设置，不会隐式应用到整个集群。</p><form id="policy-form"><label class="form-field">维护范围<select id="policy-workload">${options(choices, workload === "all" ? choices[0][0] : workload)}</select></label><div id="policy-options"></div><div class="inline-note">已有连接独立维护。新副本是否接入由策略决定；状态与恢复均在浏览器中模拟。</div><p id="policy-error" class="form-error" role="alert"></p><div class="dialog-footer"><button class="button secondary" type="button" data-close>取消</button><button class="button primary" type="submit">应用模拟策略</button></div></form>`,
       "CONNECTION POLICY",
     );
+    const renderOptions = () => {
+      const current =
+        state.policies[`${environment}/${$("#policy-workload").value}`] ||
+        "selected";
+      $("#policy-options").innerHTML = [
+        [
+          "selected",
+          "维护已接入目标",
+          "新发现副本等待明确接入；现有目标独立维护。",
+        ],
+        [
+          "all",
+          isLocal() ? "维护此设备的全部 JVM" : "维护此工作负载全部副本",
+          "包含当前目标和后续新实例。不会自动迁移旧诊断任务。",
+        ],
+        [
+          "discover",
+          "仅发现，不维护连接",
+          "该范围有排队或进行中任务时不可切换。",
+        ],
+      ]
+        .map(
+          ([id, title, description]) =>
+            `<label class="policy-option"><input type="radio" name="policy" value="${id}" ${id === current ? "checked" : ""}><span><strong>${title}</strong><p>${description}</p></span></label>`,
+        )
+        .join("");
+    };
+    renderOptions();
+    $("#policy-workload").addEventListener("change", renderOptions);
     $("#policy-form").addEventListener("submit", (event) => {
       event.preventDefault();
       try {
         store.setPolicy(
-          env,
-          application,
+          environment,
+          $("#policy-workload").value,
           new FormData(event.currentTarget).get("policy"),
         );
         $("#info-dialog").close();
         render();
-        toast("模拟连接策略已更新。");
+        toast("指定范围的模拟维护策略已更新。");
       } catch (error) {
         $("#policy-error").textContent = error.message;
       }
@@ -493,13 +736,13 @@
   }
   function openScenarios() {
     const pod = selectedPod();
-    if (!pod || pod.retired) {
-      toast("请先选择一个当前实例。");
+    if (!pod || pod.retired || pod.channel === "offline") {
+      toast("请选择在线环境中的当前目标。");
       return;
     }
     showInfo(
       "体验连接生命周期",
-      `<div class="target-summary"><strong>${escape(pod.name)}</strong>${escape(environmentName(pod.environment))} · JVM g${pod.generation}</div><p class="field-hint">仅操作所选模拟实例。可先发起 Watch，再体验重连或重建。</p><div class="scenario-options"><button class="scenario-option" data-scenario="disconnect" ${!pod.managed ? "disabled" : ""}>${icon("refresh")}<span><strong>模拟短暂断线</strong><small>单条通道约 5 秒后恢复，其他实例不受影响。</small></span>${icon("arrow")}</button><button class="scenario-option" data-scenario="replace">${icon("box")}<span><strong>模拟同名实例重建</strong><small>UID 与 JVM 代次变化，旧任务中断，不自动重放。</small></span>${icon("arrow")}</button></div><div class="dialog-footer"><button class="button secondary" data-close>返回工作台</button></div>`,
+      `<div class="target-summary"><strong>${escape(pod.name)}</strong>${escape(environmentName(pod.environment))} / ${escape(pod.namespace || "本机")} · g${pod.generation}</div><p class="field-hint">可先发起多目标 Watch，再观察其中一个目标中断后的批次状态。</p><div class="scenario-options"><button class="scenario-option" data-scenario="disconnect" ${!pod.managed ? "disabled" : ""}>${icon("refresh")}<span><strong>模拟短暂断线</strong><small>约 5 秒后独立恢复，不影响其他实例。</small></span>${icon("arrow")}</button><button class="scenario-option" data-scenario="replace">${icon("box")}<span><strong>模拟同名实例重建</strong><small>UID 与 JVM 代次变化，旧任务中断，不自动重放。</small></span>${icon("arrow")}</button></div><div class="dialog-footer"><button class="button secondary" data-close>返回工作台</button></div>`,
       "LIFECYCLE DEMO",
     );
     $$("#info-content [data-scenario]").forEach((button) =>
@@ -510,14 +753,14 @@
           else {
             const replacement = store.replacePod(pod.key);
             checked.delete(pod.key);
-            selectionByContext.set(context().join("/"), replacement.key);
+            remembered.set(environment, replacement.key);
           }
           $("#info-dialog").close();
           render();
           toast(
             button.dataset.scenario === "disconnect"
-              ? "所选通道已模拟断开，将独立恢复。"
-              : "发现同名新实例。下方保留旧任务，上方可选择新代次。",
+              ? "所选通道开始独立恢复。"
+              : "新实例已被发现。旧任务保留原身份，未自动重放。",
           );
         } catch (error) {
           toast(error.message);
@@ -541,39 +784,69 @@
     else if (value === "watch")
       $("#expression").value = "{params, returnObj, throwExp}";
   }
-  function prepareDiagnosis(keys) {
-    const pods = keys.map(podFor).filter(Boolean);
-    if (!pods.length || pods.some((pod) => pod.retired)) {
-      toast("目标已替换，请重新选择当前实例。");
+  function prepareDiagnosis(keys, source = "web") {
+    const pods = [...new Set(keys)].map(podFor);
+    if (!pods.length || pods.some((p) => !p || p.retired)) {
+      toast("目标已更替，请重新选择当前实例。");
       return;
     }
-    if (pods.some((pod) => pod.channel !== "ready")) {
+    if (pods.some((p) => p.channel === "offline")) {
+      toast("本机助手离线，暂不可诊断。");
+      return;
+    }
+    if (pods.some((p) => p.channel !== "ready")) {
       if (pods.length > 1) {
-        toast("批量诊断前请先连接全部所选实例。");
+        toast("批量诊断前，请先连接所有所选目标。");
         return;
       }
       const pod = pods[0];
-      store.connect(pod.key);
-      pendingConnection = { key: pod.key, tool };
+      try {
+        store.connect(pod.key);
+      } catch (error) {
+        toast(error.message);
+        return;
+      }
+      pendingConnection = { key: pod.key, tool, source };
       render();
       showInfo(
         "正在准备诊断通道",
-        `<div class="target-summary"><strong>${escape(pod.name)}</strong>${escape(environmentName(pod.environment))} · JVM g${pod.generation}</div><div class="state-message"><span class="spinner"></span><div><strong>模拟识别与连接…</strong><span>约 2 秒后进入诊断配置，不会访问真实进程。</span></div></div>`,
+        `<div class="target-summary"><strong>${escape(pod.name)}</strong>${escape(scopeLabel(pod))} · JVM g${pod.generation}</div><div class="state-message"><span class="spinner"></span><div><strong>模拟识别与连接…</strong><span>约 2 秒后进入诊断配置，不访问真实进程。</span></div></div>`,
         "PREPARE TARGET",
       );
       return;
     }
-    dialogTargets = pods.map((pod) => ({
-      key: pod.key,
-      generation: pod.generation,
-      podUid: pod.podUid,
+    dialogSource = source;
+    dialogTargets = pods.map((p) => ({
+      key: p.key,
+      generation: p.generation,
+      podUid: p.podUid,
     }));
+    $("#diagnose-title").textContent =
+      source === "mcp" ? "演示 MCP 多目标诊断" : "发起诊断";
     $("#diagnose-targets").innerHTML =
-      `<strong>${escape(environmentName(pods[0].environment))} / ${escape(appName(pods[0].app))} · ${pods.length} 个目标</strong>${pods.map((pod) => `<code>${escape(pod.name)} · JVM g${pod.generation}</code>`).join("")}`;
-    $("#diagnose-tool").value = tool;
+      `<strong>${escape(environmentName(pods[0].environment))} · ${pods.length} 个固定目标</strong>${pods.map((p) => `<code>${escape(p.namespace || "本机")} / ${escape(p.name)} · g${p.generation}</code>`).join("")}`;
+    $("#submission-context").innerHTML =
+      `${badge(source)}<span>${source === "mcp" ? "模拟 IDE 客户端提交；不会连接模型或外部 MCP 服务。" : "Web 工作台提交；与 MCP 调用共用任务记录。"}</span>`;
+    $("#run-title").value =
+      `${source === "mcp" ? "MCP" : "Web"} · ${pods.length > 1 ? "多目标" : pods[0].workloadName || "本机"}诊断`;
+    $("#diagnose-tool").value = source === "mcp" ? "thread" : tool;
+    $("#run-concurrency").value = "2";
     $("#diagnose-error").textContent = "";
     toolFields();
     $("#diagnose-dialog").showModal();
+  }
+  function simulateMcp() {
+    const keys = checked.size
+      ? [...checked]
+      : visiblePods()
+          .filter((p) => p.channel === "ready")
+          .slice(0, 3)
+          .map((p) => p.key);
+    if (!keys.length) {
+      toast("当前环境没有可诊断目标，请先接入或切换环境。");
+      return;
+    }
+    prepareDiagnosis(keys, "mcp");
   }
   $("#diagnose-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -591,8 +864,8 @@
           throw new Error("目标状态已变化，请关闭配置后重新选择。");
         return pod;
       });
-      const selectedTool = $("#diagnose-tool").value;
-      const parameters = {};
+      const selectedTool = $("#diagnose-tool").value,
+        parameters = {};
       if (["trace", "watch"].includes(selectedTool)) {
         parameters.classPattern = $("#class-pattern").value.trim();
         parameters.methodPattern = $("#method-pattern").value.trim();
@@ -600,43 +873,45 @@
       }
       if (["watch", "ognl"].includes(selectedTool))
         parameters.expression = $("#expression").value;
-      // Prevalidate the whole group before creating any child task.
-      if (
-        ["trace", "watch"].includes(selectedTool) &&
-        (!parameters.classPattern ||
-          !parameters.methodPattern ||
-          !Number.isInteger(parameters.timeoutSeconds) ||
-          parameters.timeoutSeconds < 5 ||
-          parameters.timeoutSeconds > 120)
-      )
-        throw new Error("请填写类名、方法名，以及 5–120 秒的整数等待上限。");
-      if (
-        state.tasks.filter((task) => task.status === "running").length +
-          pods.length >
-        100
-      )
-        throw new Error("模拟任务数量已达上限，请先完成或取消部分任务。");
-      const tasks = pods.map((pod) =>
-        store.startTask(pod.key, selectedTool, parameters),
+      const run = store.startRun(
+        pods.map((p) => p.key),
+        selectedTool,
+        parameters,
+        {
+          source: dialogSource,
+          client:
+            dialogSource === "mcp" ? "IDE MCP 客户端（模拟）" : "Web 工作台",
+          title: $("#run-title").value.trim(),
+          concurrency: Number($("#run-concurrency").value),
+        },
       );
-      tasks.forEach((task) =>
+      runTasks(run).forEach((task) =>
         taskByTool.set(`${task.target.key}/${task.tool}`, task.id),
       );
       selected = pods[0].key;
       tool = selectedTool;
-      tab = "instances";
       checked.clear();
       $("#diagnose-dialog").close();
-      render();
+      if (pods.length > 1 || dialogSource === "mcp") {
+        runDetail = run.id;
+        taskDetail = null;
+        page = "tasks";
+        render();
+        $("#run-detail").scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+      } else {
+        tab = "instances";
+        render();
+        $("#diagnostic-workspace").scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+      }
       toast(
-        tasks.length > 1
-          ? `已创建 ${tasks.length} 个独立任务，可在诊断任务中分别查看与取消。`
-          : "模拟诊断已开始，可继续切换应用或环境。",
+        `诊断批次已创建：${pods.length} 个目标，最多并行 ${run.concurrency} 个。`,
       );
-      $("#diagnostic-workspace").scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-      });
     } catch (error) {
       $("#diagnose-error").textContent = error.message;
     }
@@ -648,119 +923,206 @@
     } catch {
       showInfo(
         "复制内容",
-        `<p class="body-copy">当前浏览器未允许剪贴板访问，可选中下方内容复制。</p><pre class="raw-result">${escape(text)}</pre>`,
+        `<p class="body-copy">浏览器未允许剪贴板访问，可选中以下内容复制。</p><pre class="raw-result">${escape(text)}</pre>`,
         "COPY",
       );
     }
   }
+  function openRun(id) {
+    runDetail = id;
+    taskDetail = null;
+    page = "tasks";
+    closeNavigation();
+    render();
+    $("#run-detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
   document.addEventListener("click", (event) => {
     const button = event.target.closest("button,[data-copy]");
-    if (!button) return;
+    if (!button || button.disabled) return;
     const data = button.dataset;
-    if ("close" in data) {
-      button.closest("dialog")?.close();
-      return;
-    }
-    if (data.page) {
-      showPage(data.page);
-      return;
-    }
-    if (data.app) {
-      selectionByContext.set(context().join("/"), selected);
-      app = data.app;
-      page = "workspace";
-      tab = "instances";
-      resetSelection();
-      closeNavigation();
-      render();
-      return;
-    }
-    if (data.select) {
-      selectPod(data.select);
-      return;
-    }
-    if (data.tool) {
-      tool = data.tool;
-      renderResult();
-      return;
-    }
-    if (data.tab) {
-      tab = data.tab;
-      renderHeading();
-      return;
-    }
-    if (data.diagnose) {
-      prepareDiagnosis([data.diagnose]);
-      return;
-    }
-    if (data.connect) {
-      store.connect(data.connect);
-      render();
-      toast("正在模拟连接，约 2 秒后就绪。");
-      return;
-    }
-    if (data.cancel) {
-      store.cancelTask(data.cancel);
-      render();
-      toast("模拟任务已取消。");
-      return;
-    }
-    if (data.openTask) {
-      taskDetail = data.openTask;
-      page = "tasks";
-      render();
-      $("#task-result").scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-      });
-      return;
-    }
-    if (data.taskTab) {
-      const task = state.tasks.find((task) => task.id === data.taskTab);
-      if (task) {
-        taskByTool.set(`${selected}/${tool}`, task.id);
+    try {
+      if ("close" in data) {
+        button.closest("dialog")?.close();
+        return;
+      }
+      if (data.page) {
+        showPage(data.page);
+        return;
+      }
+      if (data.environment) {
+        changeEnvironment(data.environment);
+        return;
+      }
+      if (data.workload) {
+        workload = data.workload;
+        node = "all";
+        page = "workspace";
+        tab = "instances";
+        scopeChanged();
+        closeNavigation();
+        return;
+      }
+      if (data.select) {
+        selectPod(data.select);
+        return;
+      }
+      if (data.tool) {
+        tool = data.tool;
         renderResult();
+        return;
       }
-      return;
-    }
-    if (data.raw) {
-      const pre = button
-        .closest(".result-workspace,.standalone-result")
-        .querySelector(".raw-result");
-      if (pre) {
-        pre.hidden = !pre.hidden;
-        button.setAttribute("aria-expanded", !pre.hidden);
+      if (data.tab) {
+        tab = data.tab;
+        renderHeading();
+        return;
       }
-      return;
-    }
-    if (data.copy) {
-      copy($(`#${data.copy}`).textContent);
-      return;
-    }
-    if (data.copyResult) {
-      const task = state.tasks.find((task) => task.id === data.copyResult);
-      copy(
-        JSON.stringify({ target: task.target, result: task.result }, null, 2),
-      );
-      return;
-    }
-    if (button.id === "close-task-result") {
-      taskDetail = null;
-      renderAllTasks();
+      if (data.diagnose) {
+        prepareDiagnosis([data.diagnose]);
+        return;
+      }
+      if (data.connect) {
+        store.connect(data.connect);
+        render();
+        toast("正在模拟连接，约 2 秒后就绪。");
+        return;
+      }
+      if (data.cancel) {
+        store.cancelTask(data.cancel);
+        render();
+        toast("此子任务已取消，其他目标继续执行。");
+        return;
+      }
+      if (data.cancelRun) {
+        store.cancelRun(data.cancelRun);
+        render();
+        toast("批次内排队与进行中的任务已取消，已完成结果保留。");
+        return;
+      }
+      if (data.openRun) {
+        openRun(data.openRun);
+        return;
+      }
+      if (data.openTask) {
+        const task = state.tasks.find((item) => item.id === data.openTask);
+        if (!task) return;
+        taskDetail = task.id;
+        runDetail = task.runId;
+        page = "tasks";
+        render();
+        $("#task-result").scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+        return;
+      }
+      if (data.runParameters) {
+        const run = state.runs.find((item) => item.id === data.runParameters);
+        showInfo(
+          "批次参数快照",
+          `<p class="body-copy">所有子任务使用相同参数；目标集合在提交时固定。</p><pre class="raw-result">${escape(JSON.stringify({ source: run.source, client: run.client, tool: run.tool, parameters: run.parameters, concurrency: run.concurrency }, null, 2))}</pre>`,
+          "RUN PARAMETERS",
+        );
+        return;
+      }
+      if (data.taskTab) {
+        taskByTool.set(`${selected}/${tool}`, data.taskTab);
+        renderResult();
+        return;
+      }
+      if (data.raw) {
+        const pre = button
+          .closest(".result-workspace,.standalone-result")
+          .querySelector(".raw-result");
+        if (pre) {
+          pre.hidden = !pre.hidden;
+          button.setAttribute("aria-expanded", !pre.hidden);
+        }
+        return;
+      }
+      if (data.copy) {
+        copy($(`#${data.copy}`).textContent);
+        return;
+      }
+      if (data.copyResult) {
+        const task = state.tasks.find((item) => item.id === data.copyResult);
+        copy(
+          JSON.stringify({ target: task.target, result: task.result }, null, 2),
+        );
+        return;
+      }
+      if (button.id === "close-task-result") {
+        taskDetail = null;
+        renderAllTasks();
+        return;
+      }
+      if (button.id === "close-run-detail") {
+        runDetail = null;
+        taskDetail = null;
+        renderAllTasks();
+        return;
+      }
+      if (button.id === "environment-mcp-demo") simulateMcp();
+    } catch (error) {
+      toast(error.message);
     }
   });
-  $("#environment").addEventListener("change", () => {
-    selectionByContext.set(context().join("/"), selected);
-    environment = $("#environment").value;
-    page = "workspace";
+  $("#environment").innerHTML = ["k8s", "local"]
+    .map(
+      (kind) =>
+        `<optgroup label="${kind === "k8s" ? "Kubernetes 集群" : "本机设备"}">${options(
+          state.environments
+            .filter((env) => env.kind === kind)
+            .map((env) => [
+              env.id,
+              env.name + (env.online === false ? " · 离线" : ""),
+            ]),
+          environment,
+        )}</optgroup>`,
+    )
+    .join("");
+  $("#environment").addEventListener("change", () =>
+    changeEnvironment($("#environment").value),
+  );
+  $("#all-targets-view").addEventListener("click", () => {
     tab = "instances";
-    resetSelection();
-    render();
+    clearFilters();
+    scopeChanged();
+    closeNavigation();
+  });
+  $("#reset-filters").addEventListener("click", () => {
+    clearFilters();
+    scopeChanged();
   });
   $("#app-search").addEventListener("input", renderNavigation);
-  $("#pod-search").addEventListener("input", renderPods);
-  $("#channel-filter").addEventListener("change", renderPods);
-  $("#node-group").addEventListener("change", renderPods);
+  $("#namespace-filter").addEventListener("change", () => {
+    namespace = $("#namespace-filter").value;
+    workload = "all";
+    node = "all";
+    scopeChanged();
+  });
+  $("#workload-filter").addEventListener("change", () => {
+    workload = $("#workload-filter").value;
+    node = "all";
+    scopeChanged();
+  });
+  $("#node-filter").addEventListener("change", () => {
+    node = $("#node-filter").value;
+    scopeChanged();
+  });
+  $("#pod-search").addEventListener("input", scopeChanged);
+  $("#channel-filter").addEventListener("change", scopeChanged);
+  $("#node-group").addEventListener("change", () => {
+    pageIndex = 0;
+    renderPods();
+  });
+  $("#previous-page").addEventListener("click", () => {
+    pageIndex--;
+    renderPods();
+  });
+  $("#next-page").addEventListener("click", () => {
+    pageIndex++;
+    renderPods();
+  });
   $("#pod-rows").addEventListener("change", (event) => {
     const key = event.target.dataset.selectPod;
     if (key) {
@@ -769,15 +1131,16 @@
     }
   });
   $("#select-all").addEventListener("change", (event) => {
-    visiblePods()
-      .filter((pod) => pod.channel === "ready")
-      .forEach((pod) =>
-        event.target.checked ? checked.add(pod.key) : checked.delete(pod.key),
+    pagePods()
+      .filter((p) => p.channel === "ready")
+      .forEach((p) =>
+        event.target.checked ? checked.add(p.key) : checked.delete(p.key),
       );
     renderPods();
   });
   $("#task-search").addEventListener("input", renderAllTasks);
   $("#task-status-filter").addEventListener("change", renderAllTasks);
+  $("#task-source-filter").addEventListener("change", renderAllTasks);
   $("#diagnose-tool").addEventListener("change", toolFields);
   $("#diagnose-button").addEventListener("click", () =>
     prepareDiagnosis(checked.size ? [...checked] : [selected]),
@@ -788,20 +1151,25 @@
   $("#identity-button").addEventListener("click", openIdentity);
   $("#policy-button").addEventListener("click", openPolicy);
   $("#scenario-button").addEventListener("click", openScenarios);
+  $("#simulate-mcp").addEventListener("click", simulateMcp);
   $("#refresh-button").addEventListener("click", () => {
-    if (page === "local") {
-      const before = currentPods().length;
-      store.scanLocal();
-      render();
-      toast(
-        currentPods().length > before
-          ? "模拟扫描完成，发现 1 个新 JVM。"
-          : "模拟扫描完成，暂无新进程。",
-      );
-    } else {
-      store.tick();
-      render();
-      toast("模拟实例状态已同步。");
+    try {
+      if (isLocal()) {
+        const before = allPods().length;
+        store.scanLocal(environment);
+        render();
+        toast(
+          allPods().length > before
+            ? "模拟扫描发现 1 个新增 JVM。"
+            : "模拟扫描完成，暂无新增进程。",
+        );
+      } else {
+        store.tick();
+        render();
+        toast("模拟目标状态已同步。");
+      }
+    } catch (error) {
+      toast(error.message);
     }
   });
   $("#local-scan-button").addEventListener("click", () =>
@@ -818,14 +1186,12 @@
   $("#nav-scrim").addEventListener("click", closeNavigation);
   $("#about-button").addEventListener("click", () =>
     showInfo(
-      "一个工作台，明确每一个目标。",
-      '<div class="info-copy"><p>这是 Arthas Workbench 的交互设计原型，展示多环境应用、多副本诊断、连接维护与任务生命周期。</p><p>全部进程、集群、指标与操作均为模拟。页面不发送 API 请求，不访问本机进程，刷新会恢复初始场景。</p><p>环境模型、独立保活、OGNL、Profiler、资源下发和持久任务仍需后端实现；现有双链路运行原型的能力以项目文档为准。</p></div>',
-      "PROTOTYPE / 0.2",
+      "环境、目标与诊断，清晰对应。",
+      '<div class="info-copy"><p>v0.3 以集群或本机设备为环境，Namespace、工作负载和 Node 用于筛选，不要求先登记应用。</p><p>Web 与 MCP 来源的模拟调用共用诊断批次，逐目标排队、执行、取消和保留结果。不会实际调用 AI，也不生成分析结论。</p><p>全部名称、指标、进程和配置均为虚构。无真实 API 请求，刷新后恢复初始状态。后台保活、批量 MCP 和资源管理仍需正式实现。</p></div>',
+      "PROTOTYPE / 0.3",
     ),
   );
-  $("#info-dialog").addEventListener("close", () => {
-    pendingConnection = null;
-  });
+  $("#info-dialog").addEventListener("close", () => (pendingConnection = null));
   $$("dialog").forEach((dialog) =>
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog) {
@@ -884,7 +1250,7 @@
         pendingConnection = null;
         $("#info-dialog").close();
         tool = pending.tool;
-        prepareDiagnosis([pending.key]);
+        prepareDiagnosis([pending.key], pending.source);
       } else if (!pod || pod.retired) {
         pendingConnection = null;
         $("#info-dialog").close();

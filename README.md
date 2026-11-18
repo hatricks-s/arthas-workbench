@@ -14,13 +14,13 @@
 
 [Open the interactive prototype →](https://yy568821795-max.github.io/arthas-workbench/preview/)
 
-The new **v0.2 design prototype** organizes diagnostics by environment → application → exact Pod/JVM. Explore production, staging and development deployments of the same application; group replicas by worker node; launch parallel tasks; inspect structured results; and simulate an independent reconnect or same-name Pod replacement. A single light theme keeps target identity, connection state and results in focus.
+The **v0.3 design prototype** treats each cluster or paired local device as an environment. Start with all Java targets, then filter by Namespace, workload or worker node. Submit a Web or simulated MCP diagnostic run with a concurrency limit, inspect each target's result, cancel individual or remaining tasks, and compare partial outcomes. Cross-namespace same-name workloads and offline local devices make identity boundaries visible. The existing single light theme is retained.
 
-**This is an offline design prototype, separate from the runnable gateway UI.** Per-Pod supervision, environment discovery, persistent tasks, OGNL and Profiler are simulated design interactions, not newly implemented backend features. Every metric is fabricated. Refresh resets the scenario; closing the page ends the simulation. No process, cluster or real MCP endpoint is contacted. Open `docs/preview/index.html` directly after cloning, or use the hosted preview. See [design behavior and capability boundaries](docs/UI.md).
+**This is an offline design prototype, separate from the runnable gateway UI.** Per-target supervision, environment discovery, shared Web/MCP batches, persistent tasks, OGNL and Profiler are simulated design interactions, not newly implemented backend features. Every metric is fabricated. Refresh resets the scenario; closing the page ends the simulation. No process, cluster or real MCP endpoint is contacted. Open `docs/preview/index.html` directly after cloning, or use the hosted preview. See [design behavior and capability boundaries](docs/UI.md).
 
-![Application diagnostic workspace — simulated environments, Pods and Trace results](docs/images/prototype-workspace.png)
+![Environment diagnostic workspace — fictional clusters, namespaces and JVM targets](docs/images/prototype-workspace-v3.jpg)
 
-[View the mobile workspace](docs/images/prototype-mobile-v2.png)
+[View a multi-target diagnostic run](docs/images/prototype-run-v3.jpg) · [View the mobile workspace](docs/images/prototype-mobile-v3.jpg)
 
 [Send UI feedback](https://github.com/yy568821795-max/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the environment, page, viewport and steps; remove credentials and private target names from screenshots.
 
@@ -28,7 +28,7 @@ The new **v0.2 design prototype** organizes diagnostics by environment → appli
 
 | Capability | Prototype status |
 | --- | --- |
-| Design preview | Single-theme environment/application workspace, multi-Pod task and lifecycle simulations; separate from runtime |
+| Design preview | Cluster/device environments, Namespace/workload filters, shared Web/MCP runs and lifecycle simulations; separate from runtime |
 | Runtime Web UI | Existing target search, explicit MCP verification, diagnostic forms, cancellation and in-memory session history |
 | Local Java | Outbound connector, loopback Arthas forwarding, `jps` discovery, optional explicit Attach |
 | Kubernetes | Configured kubeconfig/namespace/Pod → owned `kubectl port-forward` → existing Arthas |
@@ -55,7 +55,7 @@ flowchart LR
     Cluster -->|"kubectl port-forward"| Pod["Pod / Arthas"]
 ```
 
-**Proposed end-user experience:** open the team's shared workbench → select an environment and application → diagnose a specific JVM. Kubernetes users need only a browser and authorization. For local Java, launch the local helper once and pair it with the team server; the helper discovers processes and obtains centrally managed Arthas resources. Pairing, packaging and resource delivery are design directions, **not implemented installers or services**. See [the onboarding design](docs/ONBOARDING.md).
+**Proposed end-user experience:** open the team's shared workbench → select a cluster or local environment → optionally filter the inventory → diagnose one or more exact JVMs. Kubernetes users need only a browser and authorization. For local Java, launch the local helper once and pair it with the team server; the helper discovers processes and obtains centrally managed Arthas resources. Pairing, packaging and resource delivery are design directions, **not implemented installers or services**. See [the onboarding design](docs/ONBOARDING.md).
 
 ## Developer quick start
 
@@ -136,7 +136,7 @@ cargo test --locked --features test-fixtures --manifest-path "$project/connector
 
 这是一个专注 Arthas 的独立开源原型：把 Web 工作台、MCP 服务和本机/K8s 执行能力统一起来。
 
-- **先审查界面：** [新版交互原型](https://yy568821795-max.github.io/arthas-workbench/preview/)采用单一浅色主题，包含多环境同名应用、多 Pod 状态、并行诊断及断线／重建演示。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
+- **先审查界面：** [新版交互原型](https://yy568821795-max.github.io/arthas-workbench/preview/)沿用单一浅色主题，以集群／本机设备为环境，支持 Namespace／工作负载／Node 筛选，以及 Web/MCP 来源的多目标诊断批次、并发排队、部分完成和断线／重建演示。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
 - **本机能力的原理：** 主入口是团队共享服务器。K8s 用户只需浏览器；诊断本机 Java 时，由用户运行一次本机助手完成配对、扫描、资源准备和连接。该简化接入流程仍待实现，浏览器自身不会扫描进程。
 - **当前状态：** 两条连接链路和一组 MCP 工具已实现；自动配对、一键启动、K8s 上传与 Attach、Perl 文件传输、MySQL 尚未实现。开发配置流程不代表最终产品体验。
 - **反馈方式：** [提交界面建议](https://github.com/yy568821795-max/arthas-workbench/issues/new?template=ui-feedback.yml)，说明页面、操作步骤、屏幕尺寸与期望效果即可。
