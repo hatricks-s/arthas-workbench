@@ -1,18 +1,18 @@
 # Arthas Workbench
 
-[![CI](https://github.com/yy568821795-max/arthas-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/yy568821795-max/arthas-workbench/actions/workflows/ci.yml)
+[![CI](https://github.com/hatricks-s/arthas-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/hatricks-s/arthas-workbench/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Stage: prototype](https://img.shields.io/badge/stage-prototype-orange)
 
 **A shared Web workbench and one MCP endpoint for local and Kubernetes Java diagnostics.**
 
-[中文说明](#中文说明) · [UI preview](https://yy568821795-max.github.io/arthas-workbench/preview/) · [Screenshots](#interface-preview) · [Development](CONTRIBUTING.md) · [Security](SECURITY.md)
+[中文说明](#中文说明) · [UI preview](https://hatricks-s.github.io/arthas-workbench/preview/) · [Screenshots](#interface-preview) · [Development](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 > **Prototype — review before deployment.** This repository proves the local/Kubernetes connection paths with an actual Rust connector and simulated upstreams. It is not a production-ready release. There is no one-click installer yet. The public UI preview is entirely simulated and cannot inspect your computer or connect to a cluster.
 
 ## Interface preview
 
-[Open the interactive prototype →](https://yy568821795-max.github.io/arthas-workbench/preview/)
+[Open the interactive prototype →](https://hatricks-s.github.io/arthas-workbench/preview/)
 
 The **v0.3 design prototype** treats each cluster or paired local device as an environment. Start with all Java targets, then filter by Namespace, workload or worker node. Submit a Web or simulated MCP diagnostic run with a concurrency limit, inspect each target's result, cancel individual or remaining tasks, and compare partial outcomes. Cross-namespace same-name workloads and offline local devices make identity boundaries visible. The existing single light theme is retained.
 
@@ -22,7 +22,7 @@ The **v0.3 design prototype** treats each cluster or paired local device as an e
 
 [View a multi-target diagnostic run](docs/images/prototype-run-v3.jpg) · [View the mobile workspace](docs/images/prototype-mobile-v3.jpg)
 
-[Send UI feedback](https://github.com/yy568821795-max/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the environment, page, viewport and steps; remove credentials and private target names from screenshots.
+[Send UI feedback](https://github.com/hatricks-s/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the environment, page, viewport and steps; remove credentials and private target names from screenshots.
 
 ## What works today
 
@@ -64,7 +64,7 @@ The current runtime is validated on Windows with Python 3.13. Python 3.11–3.13
 Requirements: Git, [uv](https://docs.astral.sh/uv/), Python 3.13, Rust 1.94.1 or newer; a JDK for local scanning/Attach and kubectl for real Kubernetes targets.
 
 ```powershell
-git clone https://github.com/yy568821795-max/arthas-workbench.git
+git clone https://github.com/hatricks-s/arthas-workbench.git
 Set-Location arthas-workbench
 $project = (Get-Location).Path
 $env:UV_CACHE_DIR = "$project/.cache/uv"
@@ -136,10 +136,10 @@ cargo test --locked --features test-fixtures --manifest-path "$project/connector
 
 这是一个专注 Arthas 的独立开源原型：把 Web 工作台、MCP 服务和本机/K8s 执行能力统一起来。
 
-- **先审查界面：** [新版交互原型](https://yy568821795-max.github.io/arthas-workbench/preview/)沿用单一浅色主题，以集群／本机设备为环境，支持 Namespace／工作负载／Node 筛选，以及 Web/MCP 来源的多目标诊断批次、并发排队、部分完成和断线／重建演示。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
+- **先审查界面：** [新版交互原型](https://hatricks-s.github.io/arthas-workbench/preview/)沿用单一浅色主题，以集群／本机设备为环境，支持 Namespace／工作负载／Node 筛选，以及 Web/MCP 来源的多目标诊断批次、并发排队、部分完成和断线／重建演示。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
 - **本机能力的原理：** 主入口是团队共享服务器。K8s 用户只需浏览器；诊断本机 Java 时，由用户运行一次本机助手完成配对、扫描、资源准备和连接。该简化接入流程仍待实现，浏览器自身不会扫描进程。
 - **当前状态：** 两条连接链路和一组 MCP 工具已实现；自动配对、一键启动、K8s 上传与 Attach、Perl 文件传输、MySQL 尚未实现。开发配置流程不代表最终产品体验。
-- **反馈方式：** [提交界面建议](https://github.com/yy568821795-max/arthas-workbench/issues/new?template=ui-feedback.yml)，说明页面、操作步骤、屏幕尺寸与期望效果即可。
+- **反馈方式：** [提交界面建议](https://github.com/hatricks-s/arthas-workbench/issues/new?template=ui-feedback.yml)，说明页面、操作步骤、屏幕尺寸与期望效果即可。
 
 ## Contributing and license
 

@@ -24,9 +24,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yy568821795-max/arthas-workbench"
-Repository = "https://github.com/yy568821795-max/arthas-workbench"
-Issues = "https://github.com/yy568821795-max/arthas-workbench/issues"
+Homepage = "https://github.com/hatricks-s/arthas-workbench"
+Repository = "https://github.com/hatricks-s/arthas-workbench"
+Issues = "https://github.com/hatricks-s/arthas-workbench/issues"
 
 [project.scripts]
 arthas-workbench = "workbench.cli:main"

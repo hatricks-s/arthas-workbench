@@ -6,7 +6,7 @@ This repository is an experimental prototype. Only the current `main` branch rec
 
 ## Report privately
 
-Use [GitHub private vulnerability reporting](https://github.com/yy568821795-max/arthas-workbench/security/advisories/new). Please do not put credentials, usable kubeconfig, private hosts, process dumps or an active-target exploit in a public issue.
+Use [GitHub private vulnerability reporting](https://github.com/hatricks-s/arthas-workbench/security/advisories/new). Please do not put credentials, usable kubeconfig, private hosts, process dumps or an active-target exploit in a public issue.
 
 Include the affected commit, platform, a minimal reproduction using disposable or simulated targets, expected behavior and impact. An acknowledgement and next steps will be provided as maintainer availability permits; no response SLA is promised.
 
@@ -19,6 +19,6 @@ Include the affected commit, platform, a minimal reproduction using disposable o
 - JVM Attach, diagnostic expressions and instrumentation can affect application behavior. Attach is opt-in and requires explicit target selection.
 - Closing a browser does not stop the JVM. Cancelling an Attach wait cannot guarantee undoing an already executed Attach.
 - Sessions and tasks are in memory. The prototype lacks production SSO, durable audit, persistent jobs and a hardened multi-replica deployment model.
-- Static preview credentials are deliberately nonsecret fixtures, and the preview uses simulated fetch responses only. Never substitute real credentials into published preview assets.
+- The offline design preview has no API fetch adapter or real credentials. Its deterministic model runs in the browser with `connect-src 'none'`. Never put credentials or private environment data into published preview assets.
 
 The lockfiles provide repeatable dependencies, not a claim that every dependency has completed a security audit. Do not expose this prototype directly to the public Internet as a production diagnostic service.

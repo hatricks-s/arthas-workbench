@@ -4,7 +4,7 @@ Thank you for helping shape Arthas Workbench. UI feedback, reproducible defects,
 
 ## Start with the prototype
 
-Review the [interactive mock](https://yy568821795-max.github.io/arthas-workbench/preview/) or open `docs/preview/index.html` locally. Distinguish feedback about the current engineering prototype from ideas for the planned one-launch onboarding flow.
+Review the [interactive mock](https://hatricks-s.github.io/arthas-workbench/preview/) or open `docs/preview/index.html` locally. Distinguish feedback about the current engineering prototype from ideas for the planned one-launch onboarding flow.
 
 For runtime development, follow the root README. Use Python 3.13 and Rust 1.94.1 for the validated baseline. Keep caches and generated credentials under the ignored project directories.
 
