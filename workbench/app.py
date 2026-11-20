@@ -5,21 +5,16 @@ import json
 import time
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
-
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_request
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route, WebSocketRoute
-from starlette.staticfiles import StaticFiles
 
 from .arthas import ArthasClient
 from .config import ServerConfig, User
 from .tunnel import Hub, TunnelError
-
-STATIC = Path(__file__).parent / "static"
 
 
 class Jobs:
@@ -228,9 +223,6 @@ def create_app(config: ServerConfig):
         except PermissionError as exc:
             return JSONResponse({"error": str(exc)}, 404)
 
-    async def index(request: Request):
-        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
-
     async def health(request: Request):
         return JSONResponse({"status": "ok", "prototype": True, "version": "0.1.0"})
 
@@ -249,11 +241,10 @@ def create_app(config: ServerConfig):
                 await hub.close()
 
     app = Starlette(routes=[
-        Route("/", index), Route("/health", health),
+        Route("/health", health),
         Route("/api/state", state), Route("/api/jobs", operate, methods=["POST"]),
         Route("/api/jobs/{job_id}", job, methods=["GET", "DELETE"]),
         WebSocketRoute("/connectors/ws", hub.websocket),
-        Mount("/static", app=StaticFiles(directory=STATIC)),
         Mount("/", app=mcp_app),
     ], lifespan=lifespan)
     app.state.hub, app.state.arthas, app.state.jobs = hub, arthas, jobs

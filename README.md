@@ -29,7 +29,7 @@ The prototype keeps one screen and one job per area: a quiet target list on the 
 | Capability | Prototype status |
 | --- | --- |
 | Design preview | Cluster/device environments, Namespace/workload filters, shared Web/MCP runs and lifecycle simulations; separate from runtime |
-| Runtime Web UI | Existing target search, explicit MCP verification, diagnostic forms, cancellation and in-memory session history |
+| Web UI | Not built yet. Only the design prototype exists; product UI starts after the prototype is approved |
 | Local Java | Outbound connector, loopback Arthas forwarding, `jps` discovery, optional explicit Attach |
 | Kubernetes | Configured kubeconfig/namespace/Pod → owned `kubectl port-forward` → existing Arthas |
 | MCP endpoint | Streamable HTTP at `/mcp`; per-request authentication and explicit instance selection |
@@ -100,7 +100,7 @@ This starts the real Web/MCP server and Rust connector against fake Arthas endpo
   --config "$project/.runtime/local/local-connector.json"
 ```
 
-Open `http://127.0.0.1:18880/`. Use the `operator` user token from the generated server configuration. User tokens are distinct from connector tokens and are kept only in page memory. Configuration generation does not contact a target and refuses to overwrite existing credentials.
+The gateway exposes `/health`, `/api/*`, `/mcp` and the connector WebSocket; there is no bundled web UI yet. Use the `operator` user token from the generated server configuration for the HTTP APIs and MCP calls. User tokens are distinct from connector tokens. Configuration generation does not contact a target and refuses to overwrite existing credentials.
 
 - Existing local Arthas: point the local target at its HTTP loopback origin.
 - Optional local Attach: supply `--arthas-home` pointing to a complete offline distribution when generating configuration. Attach is disabled by default, requires an explicit PID/identity and user scope, and stages isolated configuration under the connector data directory.
