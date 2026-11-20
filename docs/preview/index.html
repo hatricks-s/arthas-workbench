@@ -3,498 +3,236 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0b0f17" />
+    <meta name="theme-color" content="#f5f6f8" />
     <meta
       name="description"
-      content="Arthas Workbench 精密诊断工作台原型：K8s WebSocket 免进程隧道、免运维自举挂载、多副本横向差分与 Web/MCP 共用证据账本。"
+      content="Arthas Workbench 原型：同一屏完成目标选择、多副本对比与证据查看。"
     />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
     />
-    <title>Arthas Workbench · Java 运行时精密诊断台</title>
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='9' fill='%230b0f17'/%3E%3Cpath d='M11 28 20 11l9 17M14.5 22h11' fill='none' stroke='%2338bdf8' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='20' cy='11' r='2.4' fill='%2310b981'/%3E%3C/svg%3E"
-    />
-    <link
-      rel="preload"
-      href="./fonts/DM-Sans.ttf"
-      as="font"
-      type="font/ttf"
-      crossorigin
-    />
+    <title>Arthas Workbench · Java 运行时诊断台</title>
+    <link rel="preload" href="./fonts/DM-Sans.ttf" as="font" type="font/ttf" crossorigin />
     <link rel="stylesheet" href="./style.css" />
     <script src="./model.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
-    <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <defs>
-        <symbol id="i-workbench" viewBox="0 0 24 24">
-          <rect x="3" y="3" width="8" height="18" rx="1.8" />
-          <rect x="13" y="3" width="8" height="8" rx="1.8" />
-          <rect x="13" y="13" width="8" height="8" rx="1.8" />
+        <symbol id="i-grid" viewBox="0 0 24 24">
+          <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+          <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+          <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+          <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
         </symbol>
-        <symbol id="i-ledger" viewBox="0 0 24 24">
-          <path d="M4 6h16M4 12h16M4 18h10" />
-          <circle cx="18" cy="18" r="2.5" />
+        <symbol id="i-list" viewBox="0 0 24 24">
+          <path d="M4 7h16M4 12h16M4 17h10" />
         </symbol>
-        <symbol id="i-mcp" viewBox="0 0 24 24">
-          <path d="m7 8-4 4 4 4m10-8 4 4-4 4M14 4l-4 16" />
-        </symbol>
-        <symbol id="i-bolt" viewBox="0 0 24 24">
-          <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />
+        <symbol id="i-flow" viewBox="0 0 24 24">
+          <circle cx="12" cy="5" r="2.3" />
+          <circle cx="5.5" cy="19" r="2.3" />
+          <circle cx="18.5" cy="19" r="2.3" />
+          <path d="M12 7.3v4.2M10.4 12.6l-3 4M13.6 12.6l3 4" />
         </symbol>
         <symbol id="i-search" viewBox="0 0 24 24">
-          <circle cx="10.5" cy="10.5" r="6.5" />
-          <path d="m15.5 15.5 5 5" />
+          <circle cx="10.5" cy="10.5" r="6" />
+          <path d="m15.5 15.5 4.5 4.5" />
         </symbol>
         <symbol id="i-play" viewBox="0 0 24 24">
-          <path d="m7 5 12 7-12 7V5Z" />
+          <path d="m8 5 11 7-11 7V5Z" />
         </symbol>
         <symbol id="i-link" viewBox="0 0 24 24">
-          <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11 4.93" />
-          <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19.07" />
-        </symbol>
-        <symbol id="i-copy" viewBox="0 0 24 24">
-          <rect x="9" y="9" width="12" height="12" rx="2" />
-          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-        </symbol>
-        <symbol id="i-refresh" viewBox="0 0 24 24">
-          <path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4" />
-        </symbol>
-        <symbol id="i-shield" viewBox="0 0 24 24">
-          <path d="M12 3l8 3v6c0 5.2-3.4 8.7-8 10-4.6-1.3-8-4.8-8-10V6l8-3Z" />
-          <path d="m9 12 2 2 4-4" />
-        </symbol>
-        <symbol id="i-id" viewBox="0 0 24 24">
-          <rect x="3" y="5" width="18" height="14" rx="2" />
-          <circle cx="8.5" cy="12" r="2" />
-          <path d="M13 10h5M13 14h4" />
-        </symbol>
-        <symbol id="i-sun" viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="4" />
-          <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41" />
-        </symbol>
-        <symbol id="i-moon" viewBox="0 0 24 24">
-          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+          <path d="M10 13a5 5 0 0 0 7 0l2.8-2.8a5 5 0 0 0-7-7L11 5" />
+          <path d="M14 11a5 5 0 0 0-7 0l-2.8 2.8a5 5 0 0 0 7 7L13 19" />
         </symbol>
         <symbol id="i-close" viewBox="0 0 24 24">
           <path d="M6 6l12 12M18 6 6 18" />
         </symbol>
+        <symbol id="i-alert" viewBox="0 0 24 24">
+          <path d="M12 3.5 2.8 20h18.4L12 3.5Z" />
+          <path d="M12 9.5v4.5m0 3h.01" />
+        </symbol>
         <symbol id="i-check" viewBox="0 0 24 24">
           <path d="m5 12 4.5 4.5L19 7" />
         </symbol>
-        <symbol id="i-alert" viewBox="0 0 24 24">
-          <path d="M12 3 2.5 20h19L12 3Z" />
-          <path d="M12 9v5m0 3h.01" />
+        <symbol id="i-chevron" viewBox="0 0 24 24">
+          <path d="m8 10 4 4 4-4" />
         </symbol>
         <symbol id="i-terminal" viewBox="0 0 24 24">
-          <rect x="3" y="4" width="18" height="16" rx="2" />
-          <path d="m7 9 3 3-3 3m5 0h5" />
+          <rect x="3" y="4.5" width="18" height="15" rx="2" />
+          <path d="m7 10 2.5 2L7 14m5 0h4" />
         </symbol>
-        <symbol id="i-diff" viewBox="0 0 24 24">
-          <path d="M9 3v18M15 3v18M3 9h18M3 15h18" />
+        <symbol id="i-copy" viewBox="0 0 24 24">
+          <rect x="9" y="9" width="11" height="11" rx="2" />
+          <path d="M15 5.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h.5" />
+        </symbol>
+        <symbol id="i-bolt" viewBox="0 0 24 24">
+          <path d="M13 2.5 4.5 14H11l-1 7.5L19.5 10H13l1-7.5Z" />
         </symbol>
         <symbol id="i-stop" viewBox="0 0 24 24">
-          <rect x="6" y="6" width="12" height="12" rx="2" />
+          <rect x="6.5" y="6.5" width="11" height="11" rx="2" />
         </symbol>
       </defs>
     </svg>
 
-    <a class="skip-link" href="#workspace-shell">跳到主工作台</a>
+    <a class="skip" href="#list">跳到目标列表</a>
 
-    <div class="app-frame" id="app-frame">
-      <!-- 左侧极窄精密导轨 -->
-      <aside class="rail" aria-label="主导航">
-        <button class="rail-brand" id="brand-home" title="Arthas Workbench · 返回诊断台" aria-label="返回主诊断台">
-          <span class="brand-glyph" aria-hidden="true">A</span>
+    <div class="app">
+      <!-- 左侧 56px 图标轨：只有三个入口 -->
+      <nav class="rail" aria-label="主导航">
+        <span class="rail-mark" aria-hidden="true">A</span>
+        <button class="rail-btn" data-view="workbench" aria-label="诊断台" title="诊断台 (1)">
+          <svg class="ic"><use href="#i-grid" /></svg>
         </button>
+        <button class="rail-btn" data-view="ledger" aria-label="批次" title="批次账本 (2)">
+          <svg class="ic"><use href="#i-list" /></svg>
+        </button>
+        <button class="rail-btn" data-view="pipeline" aria-label="链路" title="注入链路与 MCP (3)">
+          <svg class="ic"><use href="#i-flow" /></svg>
+        </button>
+        <button class="rail-btn rail-bottom" id="open-cmdk" aria-label="命令面板" title="命令面板 (Ctrl+K)">
+          <svg class="ic"><use href="#i-terminal" /></svg>
+        </button>
+      </nav>
 
-        <nav class="rail-nav" aria-label="视图切换">
-          <button class="rail-btn active" data-view="workbench" aria-current="page" title="双舱诊断工作台 (1)">
-            <svg class="ic"><use href="#i-workbench" /></svg>
-            <span>诊断台</span>
-          </button>
-          <button class="rail-btn" data-view="ledger" title="Web / MCP 共用批次账本 (2)">
-            <svg class="ic"><use href="#i-ledger" /></svg>
-            <span>批次</span>
-            <em class="rail-badge" id="rail-active-runs">1</em>
-          </button>
-          <button class="rail-btn" data-view="pipeline" title="免运维注入链路与 MCP 接入 (3)">
-            <svg class="ic"><use href="#i-mcp" /></svg>
-            <span>链路</span>
-          </button>
-        </nav>
-
-        <div class="rail-footer">
-          <button class="rail-btn" id="open-chaos-btn" title="混沌演练：断连 / Pod 重建 / 自动挂载">
-            <svg class="ic"><use href="#i-bolt" /></svg>
-            <span>演练</span>
-          </button>
-          <button class="rail-btn" id="open-cmdk-rail" title="全局命令舱 (Ctrl+K / ⌘K)">
-            <svg class="ic"><use href="#i-terminal" /></svg>
-            <span>⌘K</span>
-          </button>
-        </div>
-      </aside>
-
-      <!-- 右侧主体容器 -->
-      <div class="workspace-shell" id="workspace-shell">
-        <!-- 46px 顶部精密控制横梁 -->
-        <header class="instrument-bar">
-          <div class="bar-left">
-            <div class="env-switcher">
-              <span class="env-tier" id="env-tier-badge">PROD</span>
-              <select id="env-select" aria-label="选择集群或本机环境"></select>
-            </div>
-            <span class="bar-sep" aria-hidden="true"></span>
-            <div class="protocol-pill" id="protocol-pill" title="底层隧道与探针注入策略">
-              <span class="pulse-dot"></span>
-              <span id="protocol-text">K8s WS v4.channel · 免进程隧道</span>
-            </div>
+      <div class="shell">
+        <!-- 48px 顶栏：环境 + 搜索，选中后原位变为执行条 -->
+        <header class="topbar">
+          <div class="env">
+            <span class="tier" id="tier">PROD</span>
+            <select id="env-select" aria-label="切换环境"></select>
           </div>
 
-          <div class="bar-center" id="bar-scope-strip">
-            <label class="filter-chip">
-              <span>NS</span>
-              <select id="ns-filter" aria-label="按 Namespace 筛选"></select>
+          <div class="topbar-slot" id="slot-idle">
+            <label class="search">
+              <svg class="ic sm"><use href="#i-search" /></svg>
+              <input id="search" type="search" placeholder="搜索服务、Pod 后缀、Node 或 PID" aria-label="搜索目标" />
             </label>
-            <label class="filter-chip">
-              <span>负载</span>
-              <select id="workload-filter" aria-label="按工作负载筛选"></select>
-            </label>
-            <label class="filter-chip">
-              <span>探针</span>
-              <select id="channel-filter" aria-label="按探针状态筛选">
-                <option value="all">全部状态</option>
-                <option value="ready">已就绪</option>
-                <option value="discovered">待按需挂载</option>
-                <option value="reconnecting">挂载/重连中</option>
-                <option value="offline">设备离线</option>
-              </select>
-            </label>
-            <button class="ghost-xs" id="reset-filters-btn" hidden>清空筛选</button>
           </div>
 
-          <div class="bar-right">
-            <div class="readiness-meter" id="readiness-meter" title="已就绪探针 / 当前环境总目标（发现目标不自动 Attach，诊断时可一键自举）">
-              <span class="meter-num" id="ready-ratio">8 / 14</span>
-              <span class="meter-caption">MCP 就绪</span>
-            </div>
-            <button class="cmdk-trigger" id="cmdk-trigger" type="button" aria-label="打开命令面板">
-              <svg class="ic xs"><use href="#i-search" /></svg>
-              <span>快速指令…</span>
-              <kbd>Ctrl K</kbd>
+          <div class="topbar-slot" id="slot-action" hidden>
+            <span class="sel-count" id="sel-count">已选 3 个</span>
+            <select id="tool-select" class="tool-select" aria-label="诊断工具"></select>
+            <input id="arg-class" class="arg" value="sample.orders.OrderOrchestrator" aria-label="类匹配" />
+            <input id="arg-method" class="arg narrow" value="createOrder" aria-label="方法匹配" />
+            <button class="btn-primary" id="run-btn" type="button">
+              <svg class="ic sm"><use href="#i-play" /></svg><span>执行</span><kbd>⌘↵</kbd>
             </button>
-            <span class="sim-chip" title="纯前端确定性模型，无真实网络请求">SIMULATED</span>
+            <button class="btn-text" id="clear-sel" type="button">取消</button>
           </div>
+
+          <button class="kbd-hint" id="cmdk-btn" type="button" aria-label="打开命令面板">
+            <kbd>Ctrl K</kbd>
+          </button>
         </header>
 
-        <!-- 移动端双舱切换条（仅窄屏显示） -->
-        <div class="mobile-pane-tabs" id="mobile-pane-tabs" role="tablist" aria-label="窄屏面板切换">
-          <button role="tab" aria-selected="true" data-mpane="targets" class="active">
-            目标矩阵 <span id="m-target-count">14</span>
-          </button>
-          <button role="tab" aria-selected="false" data-mpane="stage">
-            证据舱 · Diff
-          </button>
-        </div>
-
-        <!-- 视图 1：双舱联动精密诊断台 -->
-        <main class="split-workbench" id="view-workbench">
-          <!-- 左舱：冷白 1px 机械网格 · 目标矩阵 -->
-          <section class="pane-targets" id="pane-targets" aria-label="候选 JVM 目标矩阵">
-            <div class="subbar">
-              <label class="inline-search">
-                <svg class="ic xs"><use href="#i-search" /></svg>
-                <input
-                  id="target-search"
-                  type="search"
-                  placeholder="搜 Pod 后缀、Node IP、PID 或同名服务…"
-                  aria-label="搜索目标"
-                />
+        <!-- 视图一：目标列表 + 证据 -->
+        <main class="workbench" id="view-workbench">
+          <section class="targets" aria-label="诊断目标">
+            <div class="list-head">
+              <span class="list-title"><strong id="target-count">14</strong> 个目标</span>
+              <label class="ns-filter">
+                <select id="ns-select" aria-label="按 Namespace 筛选"></select>
               </label>
-              <div class="subbar-actions">
-                <select id="group-by-select" class="micro-select" aria-label="分组维度">
-                  <option value="workload">按工作负载分组</option>
-                  <option value="namespace">按 Namespace 分组</option>
-                  <option value="node">按 Node 节点分组</option>
-                  <option value="none">平铺列表</option>
-                </select>
-                <button class="micro-btn" id="quick-select-replicas" type="button" title="一键勾选当前工作负载前 3 个副本做横向差分">
-                  勾选3副本对比
-                </button>
-                <button class="micro-btn" id="local-scan-btn" type="button" hidden>
-                  <svg class="ic xs"><use href="#i-refresh" /></svg>扫描本机 JVM
-                </button>
-                <button class="micro-btn" id="policy-btn" type="button" title="按工作负载设置探针自动维护策略">
-                  <svg class="ic xs"><use href="#i-shield" /></svg>策略
-                </button>
-              </div>
             </div>
-
-            <!-- 快捷工作负载胶囊带 -->
-            <div class="workload-strip" id="workload-strip" aria-label="工作负载快捷切换"></div>
-
-            <!-- 高密度目标表格 -->
-            <div class="matrix-scroll" id="matrix-scroll">
-              <table class="target-matrix" aria-label="Java 诊断目标列表">
-                <thead>
-                  <tr>
-                    <th class="col-check">
-                      <input type="checkbox" id="check-all" aria-label="全选当前可见目标" />
-                    </th>
-                    <th>实例身份 / 容器 PID</th>
-                    <th>负载水位 (CPU / Heap)</th>
-                    <th>探针与通道</th>
-                    <th class="col-act">动作</th>
-                  </tr>
-                </thead>
-                <tbody id="target-tbody"></tbody>
-              </table>
-            </div>
-
-            <!-- 左舱底部：勾选即浮出的深曜石指令发射船坞 -->
-            <div class="launch-dock" id="launch-dock" hidden>
-              <div class="dock-top">
-                <div class="dock-scope">
-                  <span class="dock-count" id="dock-count">已锁定 3 个 JVM</span>
-                  <span class="dock-mount-hint" id="dock-mount-hint"></span>
-                </div>
-                <button class="dock-clear" id="dock-clear" type="button">清空选择</button>
-              </div>
-              <div class="dock-controls">
-                <div class="dock-tools" id="dock-tools" role="radiogroup" aria-label="批量诊断工具"></div>
-                <div class="dock-params" id="dock-params">
-                  <input
-                    id="dock-class"
-                    type="text"
-                    value="sample.orders.OrderOrchestrator"
-                    placeholder="类匹配 Pattern"
-                    aria-label="类匹配表达式"
-                  />
-                  <input
-                    id="dock-method"
-                    type="text"
-                    value="createOrder"
-                    placeholder="方法名"
-                    aria-label="方法匹配表达式"
-                  />
-                </div>
-                <button class="dock-fire-btn" id="dock-fire-btn" type="button">
-                  <svg class="ic xs"><use href="#i-play" /></svg>
-                  <span id="dock-fire-label">并发采样对比</span>
-                  <kbd>⌘↵</kbd>
-                </button>
-              </div>
-            </div>
+            <div class="list" id="list" tabindex="-1"></div>
+            <div class="list-foot" id="list-foot"></div>
           </section>
 
-          <!-- 可拖拽分屏手柄 -->
-          <div
-            class="split-resizer"
-            id="split-resizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="调整左右分屏宽度"
-            tabindex="0"
-          ></div>
-
-          <!-- 右舱：深曜石高对比证据舞台 (Obsidian Evidence Stage) -->
-          <section class="pane-stage" id="pane-stage" data-stage-theme="obsidian" aria-label="实时诊断证据舞台">
-            <header class="stage-header">
-              <div class="stage-mode-switch" role="tablist" aria-label="证据模式切换">
-                <button role="tab" id="tab-mode-diff" data-smode="diff" class="active" aria-selected="true">
-                  <svg class="ic xs"><use href="#i-diff" /></svg>
-                  <span>多副本差分 Diff</span>
-                  <em id="diff-run-tag">3 副本</em>
-                </button>
-                <button role="tab" id="tab-mode-single" data-smode="single" aria-selected="false">
-                  <svg class="ic xs"><use href="#i-terminal" /></svg>
-                  <span>单实例显微镜</span>
-                </button>
-              </div>
-
-              <div class="stage-actions">
-                  <button class="stage-btn" id="copy-Permalink-btn" type="button" title="复制固定绑定本次 Run 快照与目标 UID 的团队分享链接">
-                  <svg class="ic xs"><use href="#i-link" /></svg>
-                  <span class="hide-xs">复制证据链接</span>
-                </button>
-                <button class="stage-btn icon-only" id="toggle-stage-theme" type="button" title="切换证据舱明/暗画布" aria-label="切换证据舱深色或浅色背景">
-                  <svg class="ic xs"><use href="#i-sun" /></svg>
-                </button>
-              </div>
-            </header>
-
-            <div class="stage-body" id="stage-body"></div>
-          </section>
+          <section class="evidence" id="evidence" aria-label="诊断证据"></section>
         </main>
 
-        <!-- 视图 2：Web / MCP 统一持久批次账本 (MySQL 模型映射) -->
-        <main class="ledger-workbench" id="view-ledger" hidden>
-          <section class="ledger-list-pane" aria-label="全部诊断批次记录">
-            <div class="ledger-toolbar">
-              <div>
-                <h1>统一诊断账本 <span>Runs &amp; Immutable Snapshots</span></h1>
-                <p>Web 与 IDE MCP 共用同一套批次事实表；每次提交永久冻结 Pod UID、容器与采样窗口。</p>
-              </div>
-              <div class="ledger-filters">
-                <input id="ledger-search" type="search" placeholder="搜批次标题、实例、Namespace 或工具…" aria-label="搜索批次" />
-                <select id="ledger-source" aria-label="筛选来源">
-                  <option value="all">全部来源 (Web + MCP)</option>
-                  <option value="web">仅 Web 工作台</option>
-                  <option value="mcp">仅 IDE MCP</option>
-                </select>
-                <select id="ledger-status" aria-label="筛选状态">
-                  <option value="all">全部状态</option>
-                  <option value="running">执行中</option>
-                  <option value="succeeded">全部成功</option>
-                  <option value="partial">部分完成</option>
-                  <option value="interrupted">身份变更中断</option>
-                  <option value="cancelled">已取消</option>
+        <!-- 视图二：批次账本 -->
+        <main class="ledger" id="view-ledger" hidden>
+          <section class="ledger-list">
+            <div class="ledger-head">
+              <h1>批次</h1>
+              <div class="ledger-tools">
+                <input id="ledger-search" type="search" placeholder="搜索批次或实例" aria-label="搜索批次" />
+                <select id="ledger-source" aria-label="按来源筛选">
+                  <option value="all">全部来源</option>
+                  <option value="web">Web</option>
+                  <option value="mcp">MCP</option>
                 </select>
               </div>
             </div>
             <div class="ledger-rows" id="ledger-rows"></div>
           </section>
-          <section class="ledger-preview-pane" id="ledger-preview-pane" data-stage-theme="obsidian" aria-label="选中批次的证据详情"></section>
+          <section class="evidence" id="ledger-evidence" aria-label="批次证据"></section>
         </main>
 
-        <!-- 视图 3：免运维自举注入链路 & 统一 MCP 接入 -->
-        <main class="pipeline-workbench" id="view-pipeline" hidden>
-          <div class="pipeline-scroll">
-            <header class="pipeline-hero">
-              <div>
-                <span class="eyebrow-tag">ZERO-KUBECTL · SELF-CONTAINED ARTHAS DELIVERY</span>
-                <h1>零外部依赖 · 全节点快速挂载与统一 MCP 网关</h1>
-                <p>不求运维改基础镜像、不在服务器拉起成百上千个 <code>kubectl port-forward</code> 子进程。一套协议同时打通 K8s 生产集群、Flink 纯 JRE 容器与同事本机开发机。</p>
+        <!-- 视图三：注入链路与 MCP -->
+        <main class="pipeline" id="view-pipeline" hidden>
+          <div class="pipeline-inner">
+            <h1>目标接入链路</h1>
+            <p class="lead">浏览器只负责选择与查看。连接、注入与执行由服务器侧的 K8s 通道完成。</p>
+
+            <ol class="steps">
+              <li>
+                <h2>K8s WebSocket 通道</h2>
+                <p>服务端用 <code>v4.channel.k8s.io</code> 直接复用 APIServer 连接，不再为每个目标启动 <code>kubectl port-forward</code> 进程，也不占用本地端口。</p>
+              </li>
+              <li>
+                <h2>按需注入</h2>
+                <p>发现目标不等于已挂载。执行诊断时才下发精简包并调用 <code>jattach</code>，不启动第二个 JVM；<code>/tmp</code> 已有同版本包则直接复用。</p>
+              </li>
+              <li>
+                <h2>身份固定</h2>
+                <p>执行前确认 Pod UID、容器与真实 Java PID（容器内通常不是 1 号进程）。Pod 重建后旧任务中断，不会在新实例上重放。</p>
+              </li>
+              <li>
+                <h2>本机开发机</h2>
+                <p>同事电脑通过一次配对建立反向连接，扫描本机 JVM 无需配置 <code>JAVA_HOME</code>。</p>
+              </li>
+            </ol>
+
+            <section class="mcp">
+              <div class="mcp-head">
+                <h2>MCP 接入</h2>
+                <button class="btn-text" id="copy-mcp" type="button">
+                  <svg class="ic sm"><use href="#i-copy" /></svg>复制
+                </button>
               </div>
-              <button class="primary-cta" id="trigger-mcp-batch-demo" type="button">
-                <svg class="ic xs"><use href="#i-play" /></svg>
-                <span>实景演练：MCP 跨 3 副本自动挂载并抓线程</span>
-              </button>
-            </header>
-
-            <!-- 四步硬核链路卡片 -->
-            <section class="arch-grid" aria-label="核心技术链路对比">
-              <article class="arch-card">
-                <div class="arch-step">01 · K8s 原生多路复用隧道</div>
-                <h2>WebSocket <code>v4.channel.k8s.io</code> 直连</h2>
-                <p>Rust 网关直接通过 Kubeconfig / Rancher Proxy 建立 WebSocket 多路字节流（<code>ch0</code> 数据帧 / <code>ch1</code> 错误帧），内存直转 HTTP 请求到 Pod <code>:8616/mcp</code>。</p>
-                <div class="arch-metrics">
-                  <span><strong>0 个</strong> <code>kubectl</code> 进程</span>
-                  <span><strong>0 个</strong> 本地占用端口</span>
-                  <span><strong>~240ms</strong> 实测握手</span>
-                </div>
-              </article>
-
-              <article class="arch-card">
-                <div class="arch-step">02 · 免运维三级自适应注入</div>
-                <h2>12MB 精简包秒级下发 + 全量 <code>jattach</code></h2>
-                <p>剔除无用包，仅保留 <code>agent/core/spy.jar</code> + 双架构静态 <code>jattach</code>。不启动第二个 JVM，濒临 OOM 容器也能安全挂载：</p>
-                <ol class="tier-list">
-                  <li><strong>Tier A（内网 HTTP Pull · ~0.3s）</strong>：Pod 内自带 <code>curl</code> 从工作台签名内网 URL 拉取并校验 SHA-256，<code>/tmp</code> 命中缓存直接跳过。</li>
-                  <li><strong>Tier B（WS Stdin 流式解包 · ~3s）</strong>：禁外连容器直接走 <code>exec</code> <code>tar -xzf -</code> 流式直灌，32KB 分帧流控告别 <code>staticperl</code>。</li>
-                  <li><strong>Tier C（微接收器 / 临时容器兜底）</strong>：极简无 <code>tar</code> 镜像注入 80KB 静态接收器或 K8s Ephemeral Container。</li>
-                </ol>
-              </article>
-
-              <article class="arch-card">
-                <div class="arch-step">03 · 零裸奔安全边界 + 精确身份</div>
-                <h2>单实例随机 BasicAuth + 非 1 号 PID 识别</h2>
-                <p>自动扫描 <code>/proc/*/cmdline</code> 锁定真实 Java 进程（如 <code>PID 8</code>，跳过 <code>PID 1 sh -c</code> 与已完成 <code>init-image-tools</code>），注入随机强密码并强制 <code>telnetPort=-1</code>。</p>
-                <div class="arch-metrics">
-                  <span><strong>防横向渗透</strong> 随机鉴权</span>
-                  <span><strong>UID 冻结</strong> 重建绝不重放</span>
-                </div>
-              </article>
-
-              <article class="arch-card">
-                <div class="arch-step">04 · 本机零配置一键唤醒</div>
-                <h2><code>arthas-wb://</code> 协议配对 + <code>hsperfdata</code></h2>
-                <p>同事电脑免配 <code>JAVA_HOME</code>、免填 JSON。网页点击唤醒本机单文件助手，直接解析 <code>%TEMP%/hsperfdata_*</code> 10ms 列出 Spring Boot 端口与进程并建立反向 WSS。</p>
-                <div class="arch-metrics">
-                  <span><strong>默认私有</strong> 显式授权共享</span>
-                  <span><strong>10ms</strong> 进程发现</span>
-                </div>
-              </article>
-            </section>
-
-            <!-- MCP 接入实况与配置复制 -->
-            <section class="mcp-panel-grid">
-              <div class="mcp-config-card">
-                <div class="card-head">
-                  <div>
-                    <h2>统一 Streamable HTTP MCP 接入配置</h2>
-                    <p>粘贴至 Cursor / Claude Code / Windsurf，AI 调用自动落入团队 MySQL 审计账本并生成可分享 Web 证据链接。</p>
-                  </div>
-                  <button class="micro-btn" id="copy-mcp-json" type="button">
-                    <svg class="ic xs"><use href="#i-copy" /></svg>复制 JSON
-                  </button>
-                </div>
-                <pre class="code-box" id="mcp-json-code">{
+              <pre id="mcp-config">{
   "mcpServers": {
     "arthas-workbench": {
       "type": "streamable-http",
-      "url": "https://arthas.internal.example.com/mcp",
-      "headers": {
-        "Authorization": "Bearer &lt;your-personal-pat-token&gt;"
-      }
+      "url": "https://arthas.example.internal/mcp",
+      "headers": { "Authorization": "Bearer &lt;token&gt;" }
     }
   }
 }</pre>
-              </div>
-
-              <div class="mcp-env-card">
-                <div class="card-head">
-                  <div>
-                    <h2>各环境实时 MCP 可调用范围</h2>
-                    <p>离线设备自动熔断，不会向大模型暴露脏实例。</p>
-                  </div>
-                </div>
-                <div id="mcp-env-table-wrap"></div>
-              </div>
+              <table class="env-table">
+                <thead><tr><th>环境</th><th>通道</th><th>就绪</th><th></th></tr></thead>
+                <tbody id="env-rows"></tbody>
+              </table>
             </section>
           </div>
         </main>
       </div>
     </div>
 
-    <!-- 全局命令面板 (Ctrl+K / ⌘K) -->
-    <dialog class="cmdk-dialog" id="cmdk-dialog" aria-label="全局快速指令舱">
-      <div class="cmdk-box">
-        <div class="cmdk-input-row">
-          <svg class="ic"><use href="#i-terminal" /></svg>
-          <input
-            id="cmdk-input"
-            type="text"
-            placeholder="输入环境、副本名、诊断工具或演练动作（如：diff / trace / 重建 / flink）…"
-            autocomplete="off"
-          />
-          <kbd>ESC</kbd>
-        </div>
-        <div class="cmdk-list" id="cmdk-list" role="listbox"></div>
+    <dialog class="palette" id="palette" aria-label="命令面板">
+      <div class="palette-box">
+        <input id="palette-input" type="text" placeholder="输入命令或搜索目标" autocomplete="off" />
+        <div class="palette-list" id="palette-list"></div>
       </div>
     </dialog>
 
-    <!-- 通用模态抽屉框（目标精确身份核验 / 纳管策略 / 混沌演练） -->
-    <dialog class="modal-dialog" id="modal-dialog" aria-labelledby="modal-title">
-      <div class="modal-box">
-        <header class="modal-head">
-          <div>
-            <span class="eyebrow-tag" id="modal-eyebrow">TARGET IDENTITY</span>
-            <h2 id="modal-title">目标身份指纹</h2>
-          </div>
-          <button class="icon-close" id="modal-close" type="button" aria-label="关闭窗口">
-            <svg class="ic xs"><use href="#i-close" /></svg>
+    <dialog class="sheet" id="sheet" aria-labelledby="sheet-title">
+      <div class="sheet-box">
+        <header class="sheet-head">
+          <h2 id="sheet-title">详情</h2>
+          <button class="icon-btn" id="sheet-close" type="button" aria-label="关闭">
+            <svg class="ic sm"><use href="#i-close" /></svg>
           </button>
         </header>
-        <div class="modal-body" id="modal-body"></div>
+        <div class="sheet-body" id="sheet-body"></div>
       </div>
     </dialog>
 
-    <div class="toast-bar" id="toast-bar" role="status" aria-live="polite" hidden></div>
+    <p class="toast" id="toast" role="status" aria-live="polite" hidden></p>
   </body>
 </html>

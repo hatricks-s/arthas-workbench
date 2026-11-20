@@ -14,13 +14,13 @@
 
 [Open the interactive prototype →](https://hatricks-s.github.io/arthas-workbench/preview/)
 
-The **precision split-pane prototype** pairs a compact 1px light target matrix + floating launch dock on the left with a high-contrast Obsidian Evidence Stage on the right. Select multiple replicas (including unmounted targets that bootstrap on demand via `jattach`), run a Web or simulated MCP batch, immediately spot the outlier replica in the Replica Diff lanes, inspect inline proportional flame bars, or press `Ctrl+K` / `⌘K` to drive commands.
+The prototype keeps one screen and one job per area: a quiet target list on the left, the selected run's evidence on the right. Ticking one or more replicas turns the top bar into a single action row (tool, arguments, run); unmounted targets are injected on demand by the same action. The run view compares replicas lane by lane and highlights the outlier, with proportional flame rows and a stack panel underneath. Secondary views (run ledger, delivery path, `Ctrl+K`) stay out of the way until called.
 
 **This is an offline design prototype, separate from the runnable gateway UI.** Dynamic cluster discovery, zero-kubectl WebSocket multiplexing, self-contained bundle delivery, shared MySQL run ledgers, OGNL and Profiler remain simulated design interactions until implemented in the gateway. Open `docs/preview/index.html` locally or use the hosted preview. See [design behavior and capability boundaries](docs/UI.md).
 
-![Precision split-pane diagnostics workbench](docs/images/workbench-split.png)
+![Target list and replica evidence in one screen](docs/images/workbench-1440.png)
 
-[View zero-kubectl delivery & MCP architecture](docs/images/workbench-pipeline.png) · [View the mobile target matrix](docs/images/workbench-mobile.png) · [View the mobile evidence stage](docs/images/workbench-mobile-stage.png)
+[View at 2560px](docs/images/workbench-2560.png) · [View the delivery path & MCP setup](docs/images/workbench-pipeline.png) · [View on a phone](docs/images/workbench-mobile.png) · [View mobile evidence](docs/images/workbench-mobile-evidence.png)
 
 [Send UI feedback](https://github.com/hatricks-s/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the environment, page, viewport and steps; remove credentials and private target names from screenshots.
 
@@ -136,7 +136,7 @@ cargo test --locked --features test-fixtures --manifest-path "$project/connector
 
 这是一个专注 Arthas 的独立开源原型：把 Web 工作台、MCP 服务和本机/K8s 执行能力统一起来。
 
-- **先审查界面：** [新版双舱精密诊断台原型](https://hatricks-s.github.io/arthas-workbench/preview/)采用「冷白机械网格目标舱 + 深曜石证据舞台」分屏布局，支持多副本横向异常差分（Replica Diff）、未挂载目标一键自举接续采样、比例火焰耗时条与 `Ctrl+K` 命令舱。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
+- **先审查界面：** [新版诊断台原型](https://hatricks-s.github.io/arthas-workbench/preview/)采用单一浅色体系：左侧为安静的目标列表，右侧为所选批次的证据。勾选副本后顶栏直接变成执行条，未挂载目标在同一次操作里完成注入；批次内按副本横向对比并标出异常项。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
 - **本机能力的原理：** 主入口是团队共享服务器。K8s 用户只需浏览器；诊断本机 Java 时，由用户运行一次本机助手完成配对、扫描、资源准备和连接。该简化接入流程仍待实现，浏览器自身不会扫描进程。
 - **当前状态：** 两条连接链路和一组 MCP 工具已实现；自动配对、一键启动、K8s 上传与 Attach、Perl 文件传输、MySQL 尚未实现。开发配置流程不代表最终产品体验。
 - **反馈方式：** [提交界面建议](https://github.com/hatricks-s/arthas-workbench/issues/new?template=ui-feedback.yml)，说明页面、操作步骤、屏幕尺寸与期望效果即可。
