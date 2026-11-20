@@ -99,6 +99,43 @@ button:disabled {
   height: 0;
 }
 
+.list,
+.evidence,
+.ledger-rows,
+.palette-list,
+.sheet-body,
+.pipeline {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.list::-webkit-scrollbar,
+.evidence::-webkit-scrollbar,
+.ledger-rows::-webkit-scrollbar,
+.palette-list::-webkit-scrollbar,
+.sheet-body::-webkit-scrollbar,
+.pipeline::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+.list::-webkit-scrollbar-thumb,
+.evidence::-webkit-scrollbar-thumb,
+.ledger-rows::-webkit-scrollbar-thumb,
+.palette-list::-webkit-scrollbar-thumb,
+.sheet-body::-webkit-scrollbar-thumb,
+.pipeline::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: content-box;
+  background-color: #cfd5df;
+}
+
+.list::-webkit-scrollbar-thumb:hover,
+.evidence::-webkit-scrollbar-thumb:hover {
+  background-color: #b3bccb;
+}
+
 .ic {
   width: 18px;
   height: 18px;
