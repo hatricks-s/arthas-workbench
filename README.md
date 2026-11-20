@@ -14,13 +14,13 @@
 
 [Open the interactive prototype →](https://hatricks-s.github.io/arthas-workbench/preview/)
 
-The **v0.3 design prototype** treats each cluster or paired local device as an environment. Start with all Java targets, then filter by Namespace, workload or worker node. Submit a Web or simulated MCP diagnostic run with a concurrency limit, inspect each target's result, cancel individual or remaining tasks, and compare partial outcomes. Cross-namespace same-name workloads and offline local devices make identity boundaries visible. The existing single light theme is retained.
+The **precision split-pane prototype** pairs a compact 1px light target matrix + floating launch dock on the left with a high-contrast Obsidian Evidence Stage on the right. Select multiple replicas (including unmounted targets that bootstrap on demand via `jattach`), run a Web or simulated MCP batch, immediately spot the outlier replica in the Replica Diff lanes, inspect inline proportional flame bars, or press `Ctrl+K` / `⌘K` to drive commands.
 
-**This is an offline design prototype, separate from the runnable gateway UI.** Per-target supervision, environment discovery, shared Web/MCP batches, persistent tasks, OGNL and Profiler are simulated design interactions, not newly implemented backend features. Every metric is fabricated. Refresh resets the scenario; closing the page ends the simulation. No process, cluster or real MCP endpoint is contacted. Open `docs/preview/index.html` directly after cloning, or use the hosted preview. See [design behavior and capability boundaries](docs/UI.md).
+**This is an offline design prototype, separate from the runnable gateway UI.** Dynamic cluster discovery, zero-kubectl WebSocket multiplexing, self-contained bundle delivery, shared MySQL run ledgers, OGNL and Profiler remain simulated design interactions until implemented in the gateway. Open `docs/preview/index.html` locally or use the hosted preview. See [design behavior and capability boundaries](docs/UI.md).
 
-![Environment diagnostic workspace — fictional clusters, namespaces and JVM targets](docs/images/prototype-workspace-v3.jpg)
+![Precision split-pane diagnostics workbench](docs/images/workbench-split.png)
 
-[View a multi-target diagnostic run](docs/images/prototype-run-v3.jpg) · [View the mobile workspace](docs/images/prototype-mobile-v3.jpg)
+[View zero-kubectl delivery & MCP architecture](docs/images/workbench-pipeline.png) · [View the mobile viewport](docs/images/workbench-mobile.png)
 
 [Send UI feedback](https://github.com/hatricks-s/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the environment, page, viewport and steps; remove credentials and private target names from screenshots.
 
@@ -136,7 +136,7 @@ cargo test --locked --features test-fixtures --manifest-path "$project/connector
 
 这是一个专注 Arthas 的独立开源原型：把 Web 工作台、MCP 服务和本机/K8s 执行能力统一起来。
 
-- **先审查界面：** [新版交互原型](https://hatricks-s.github.io/arthas-workbench/preview/)沿用单一浅色主题，以集群／本机设备为环境，支持 Namespace／工作负载／Node 筛选，以及 Web/MCP 来源的多目标诊断批次、并发排队、部分完成和断线／重建演示。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
+- **先审查界面：** [新版双舱精密诊断台原型](https://hatricks-s.github.io/arthas-workbench/preview/)采用「冷白机械网格目标舱 + 深曜石证据舞台」分屏布局，支持多副本横向异常差分（Replica Diff）、未挂载目标一键自举接续采样、比例火焰耗时条与 `Ctrl+K` 命令舱。全部数据与操作均为模拟，设计预览与现有运行界面分开维护。
 - **本机能力的原理：** 主入口是团队共享服务器。K8s 用户只需浏览器；诊断本机 Java 时，由用户运行一次本机助手完成配对、扫描、资源准备和连接。该简化接入流程仍待实现，浏览器自身不会扫描进程。
 - **当前状态：** 两条连接链路和一组 MCP 工具已实现；自动配对、一键启动、K8s 上传与 Attach、Perl 文件传输、MySQL 尚未实现。开发配置流程不代表最终产品体验。
 - **反馈方式：** [提交界面建议](https://github.com/hatricks-s/arthas-workbench/issues/new?template=ui-feedback.yml)，说明页面、操作步骤、屏幕尺寸与期望效果即可。
