@@ -1112,6 +1112,213 @@ button:disabled {
 }
 
 /* =========================================================
+   Overview & cluster nodes
+   ========================================================= */
+.overview,
+.nodes {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+}
+
+.page {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 26px 24px 40px;
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.page-head h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.page-head p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.fleet,
+.node-table {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.fleet-row,
+.node-row {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  min-height: 50px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.fleet-row:last-child,
+.node-row:last-child {
+  border-bottom: 0;
+}
+
+.fleet-row {
+  grid-template-columns: minmax(0, 1.6fr) 90px 90px 90px 90px 80px 92px;
+  cursor: pointer;
+}
+
+.node-row {
+  grid-template-columns: minmax(150px, 1.4fr) 70px 80px 90px minmax(120px, 1fr) 92px 22px;
+  cursor: pointer;
+}
+
+.fleet-row:hover,
+.node-row:hover {
+  background: var(--hover);
+}
+
+.fleet-row.head,
+.node-row.head {
+  min-height: 34px;
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--ink-3);
+  cursor: default;
+}
+
+.fleet-name,
+.node-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fleet-name small,
+.node-name small {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.n {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.n.bad {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.n.ok {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.ns-list {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ns-chip {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.ns-chip.more {
+  background: transparent;
+  border-style: dashed;
+  color: var(--ink-3);
+}
+
+.chev {
+  color: var(--ink-3);
+  font-size: 11px;
+  transition: transform 140ms var(--ease);
+}
+
+.node-row.open .chev {
+  transform: rotate(90deg);
+}
+
+.node-detail {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 16px 14px 34px;
+}
+
+.node-detail:last-child {
+  border-bottom: 0;
+}
+
+.ns-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.4fr) 70px 80px 90px 92px;
+  gap: 12px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.ns-row:last-child {
+  border-bottom: 0;
+}
+
+.ns-row:hover .ns-name {
+  color: var(--accent-ink);
+}
+
+.ns-name {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.muted-cap {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.back-link {
+  margin-right: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.back-link:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+/* =========================================================
    Ledger
    ========================================================= */
 .ledger {
@@ -1648,6 +1855,45 @@ code {
 
   .detail-head .metric {
     margin-left: 0;
+  }
+
+  .page {
+    padding: 18px 14px 28px;
+  }
+
+  .page-head h1 {
+    font-size: 20px;
+  }
+
+  .fleet-row {
+    grid-template-columns: minmax(0, 1.5fr) 52px 64px 62px;
+    padding: 0 12px;
+  }
+
+  .node-row {
+    grid-template-columns: minmax(110px, 1.4fr) 56px 52px 18px;
+    padding: 0 12px;
+  }
+
+  .fleet-row > :nth-child(5),
+  .fleet-row > :nth-child(6),
+  .fleet-row > :nth-child(7),
+  .node-row > :nth-child(2),
+  .node-row > :nth-child(5),
+  .node-row > :nth-child(6) {
+    display: none;
+  }
+
+  .node-detail {
+    padding-left: 16px;
+  }
+
+  .ns-row {
+    grid-template-columns: minmax(110px, 1.4fr) 52px 56px 52px;
+  }
+
+  .ns-row > :last-child {
+    display: none;
   }
 
   .steps li {

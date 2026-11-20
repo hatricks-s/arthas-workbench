@@ -87,17 +87,23 @@
       <!-- 左侧 56px 图标轨：只有三个入口 -->
       <nav class="rail" aria-label="主导航">
         <span class="rail-mark" aria-hidden="true">A</span>
-        <button class="rail-btn" data-view="workbench" aria-label="诊断台" title="诊断台 (1)">
+        <button class="rail-btn" data-view="overview" aria-label="总览" title="集群总览 (1)">
           <svg class="ic"><use href="#i-grid" /></svg>
         </button>
-        <button class="rail-btn" data-view="ledger" aria-label="批次" title="批次账本 (2)">
-          <svg class="ic"><use href="#i-list" /></svg>
-        </button>
-        <button class="rail-btn" data-view="pipeline" aria-label="链路" title="注入链路与 MCP (3)">
+        <button class="rail-btn" data-view="nodes" aria-label="集群" title="集群与节点 (2)">
           <svg class="ic"><use href="#i-flow" /></svg>
         </button>
-        <button class="rail-btn rail-bottom" id="open-cmdk" aria-label="命令面板" title="命令面板 (Ctrl+K)">
+        <button class="rail-btn" data-view="workbench" aria-label="诊断台" title="目标诊断 (3)">
+          <svg class="ic"><use href="#i-list" /></svg>
+        </button>
+        <button class="rail-btn" data-view="ledger" aria-label="批次" title="批次账本 (4)">
           <svg class="ic"><use href="#i-terminal" /></svg>
+        </button>
+        <button class="rail-btn" data-view="pipeline" aria-label="链路" title="注入链路与 MCP (5)">
+          <svg class="ic"><use href="#i-link" /></svg>
+        </button>
+        <button class="rail-btn rail-bottom" id="open-cmdk" aria-label="命令面板" title="命令面板 (Ctrl+K)">
+          <svg class="ic"><use href="#i-search" /></svg>
         </button>
       </nav>
 
@@ -132,11 +138,39 @@
           </button>
         </header>
 
-        <!-- 视图一：目标列表 + 证据 -->
+        <!-- 视图一：集群总览 -->
+        <main class="overview" id="view-overview" hidden>
+          <div class="page">
+            <header class="page-head">
+              <h1>集群总览</h1>
+              <p id="fleet-summary">正在汇总…</p>
+            </header>
+            <div class="fleet" id="fleet-table"></div>
+          </div>
+        </main>
+
+        <!-- 视图二：集群与节点 -->
+        <main class="nodes" id="view-nodes" hidden>
+          <div class="page">
+            <header class="page-head">
+              <div>
+                <h1 id="nodes-title">集群</h1>
+                <p id="nodes-summary"></p>
+              </div>
+              <button class="btn-text" id="nodes-to-targets" type="button">查看目标列表</button>
+            </header>
+            <div class="node-table" id="node-table"></div>
+          </div>
+        </main>
+
+        <!-- 视图三：目标列表 + 证据 -->
         <main class="workbench" id="view-workbench">
           <section class="targets" aria-label="诊断目标">
             <div class="list-head">
-              <span class="list-title"><strong id="target-count">14</strong> 个目标</span>
+              <span class="list-title">
+                <button class="back-link" id="targets-back" type="button" aria-label="返回节点视图">← 节点</button>
+                <strong id="target-count">14</strong> 个目标
+              </span>
               <label class="ns-filter">
                 <select id="ns-select" aria-label="按 Namespace 筛选"></select>
               </label>

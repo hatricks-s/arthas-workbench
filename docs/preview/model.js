@@ -298,9 +298,37 @@
             restarts: skewed ? 2 : index % 2,
             age: `${index + 2}d`,
             retired: false,
+            probe: probeFor(environment.id, app.id, index, channel, startedAt),
           });
         }
       }
+    }
+
+    // Four-stage probe chain per target: channel → process → inject → mcp.
+    // Simulated, deliberately includes two failure shapes so the UI has to
+    // explain "attached but unusable" instead of a single red dot.
+    function probeFor(environment, app, index, channel, at) {
+      const ready = channel === "ready";
+      const offline = channel === "offline";
+      const probe = {
+        channel: offline ? "fail" : "ok",
+        process: offline ? "pending" : "ok",
+        inject: ready ? "ok" : "pending",
+        mcp: ready ? "ok" : "pending",
+        at: at - (index + 1) * 9000,
+        error: null,
+      };
+      if (environment === "flink" && app === "flink-job" && index === 2) {
+        probe.inject = "fail";
+        probe.mcp = "pending";
+        probe.error = "attach 被禁用：-XX:+DisableAttachMechanism";
+      }
+      if (environment === "production" && app === "orders" && index === 4) {
+        probe.inject = "ok";
+        probe.mcp = "fail";
+        probe.error = "initialize 返回 401（口令未生效）";
+      }
+      return probe;
     }
 
     function localPod(environment, pid, name, portLabel, channel) {
@@ -341,6 +369,14 @@
         restarts: 0,
         age: "48m",
         retired: false,
+        probe: {
+          channel: channel === "offline" ? "fail" : "ok",
+          process: channel === "offline" ? "pending" : "ok",
+          inject: channel === "ready" ? "ok" : "pending",
+          mcp: channel === "ready" ? "ok" : "pending",
+          at: startedAt - pid % 30000,
+          error: null,
+        },
       };
     }
 

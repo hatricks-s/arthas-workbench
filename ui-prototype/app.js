@@ -36,7 +36,7 @@
   const store = window.WorkbenchDemo.createStore();
   const state = store.state;
 
-  let view = "workbench";
+  let view = "overview";
   let envId = "production";
   let nsFilter = "all";
   let query = "";
@@ -201,6 +201,8 @@
       else b.removeAttribute("aria-current");
     });
 
+    $("#view-overview").hidden = view !== "overview";
+    $("#view-nodes").hidden = view !== "nodes";
     $("#view-workbench").hidden = view !== "workbench";
     $("#view-ledger").hidden = view !== "ledger";
     $("#view-pipeline").hidden = view !== "pipeline";
@@ -485,7 +487,11 @@
 
   function renderAll() {
     renderChrome();
-    if (view === "workbench") {
+    if (view === "overview") {
+      renderOverview();
+    } else if (view === "nodes") {
+      renderNodes();
+    } else if (view === "workbench") {
       renderList();
       renderEvidence();
     } else if (view === "ledger") {
@@ -493,6 +499,152 @@
     } else {
       renderPipeline();
     }
+  }
+
+  /* --------------------------- fleet & nodes --------------------------- */
+
+  const ago = (ms) => {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return `${s}s 前`;
+    if (s < 3600) return `${Math.round(s / 60)} 分前`;
+    return `${Math.round(s / 3600)} 小时前`;
+  };
+
+  function statsOf(pods) {
+    const okChain = (p, stage) => p.probe && p.probe[stage] === "ok";
+    return {
+      total: pods.length,
+      attachable: pods.filter((p) => okChain(p, "channel") && okChain(p, "process")).length,
+      injected: pods.filter((p) => okChain(p, "inject")).length,
+      mcp: pods.filter((p) => okChain(p, "mcp")).length,
+      failed: pods.filter((p) =>
+        ["channel", "process", "inject", "mcp"].some((k) => p.probe && p.probe[k] === "fail"),
+      ).length,
+      at: Math.max(...pods.map((p) => p.probe?.at || 0)),
+    };
+  }
+
+  function nodesOf(id) {
+    const byNode = new Map();
+    for (const p of store.listPods(id)) {
+      const list = byNode.get(p.node) || [];
+      list.push(p);
+      byNode.set(p.node, list);
+    }
+    return [...byNode.entries()]
+      .map(([node, pods]) => {
+        const ns = new Map();
+        for (const p of pods) {
+          const n = ns.get(p.namespace) || [];
+          n.push(p);
+          ns.set(p.namespace, n);
+        }
+        return {
+          node,
+          pods,
+          namespaces: [...ns.entries()].map(([name, list]) => ({ name, pods: list, ...statsOf(list) })),
+          ...statsOf(pods),
+        };
+      })
+      .sort((a, b) => b.failed - a.failed || a.node.localeCompare(b.node));
+  }
+
+  function renderOverview() {
+    const envs = state.environments.map((e) => {
+      const pods = store.listPods(e.id);
+      const nodes = new Set(pods.map((p) => p.node)).size;
+      return { e, nodes, ...statsOf(pods) };
+    });
+    const sum = envs.reduce(
+      (acc, x) => ({
+        nodes: acc.nodes + x.nodes,
+        targets: acc.targets + x.total,
+        inject: acc.inject + x.injected,
+        mcp: acc.mcp + x.mcp,
+        failed: acc.failed + x.failed,
+      }),
+      { nodes: 0, targets: 0, inject: 0, mcp: 0, failed: 0 },
+    );
+    $("#fleet-summary").textContent =
+      `${envs.length} 个环境 · ${sum.nodes} 个节点 · ${sum.targets} 个 Java 目标 · ` +
+      `${sum.inject} 个已注入 · ${sum.mcp} 个 MCP 可用` +
+      (sum.failed ? ` · ${sum.failed} 个异常` : "");
+
+    $("#fleet-table").innerHTML = `
+      <div class="fleet-row head">
+        <span>环境</span><span>节点</span><span>Java 目标</span><span>已注入</span><span>MCP 可用</span><span>异常</span><span>探测</span>
+      </div>
+      ${envs
+        .map(
+          (x) => `
+        <div class="fleet-row" data-env-row="${esc(x.e.id)}" role="button" tabindex="0">
+          <span class="fleet-name">${esc(x.e.shortName)} <small>${esc(x.e.cluster || x.e.device || "")}</small></span>
+          <span class="n">${x.nodes}</span>
+          <span class="n">${x.total}</span>
+          <span class="n ok">${x.injected}</span>
+          <span class="n ${x.mcp < x.injected ? "bad" : "ok"}">${x.mcp}</span>
+          <span class="n ${x.failed ? "bad" : ""}">${x.failed}</span>
+          <span class="muted-cap">${x.at ? ago(x.at) : "—"}</span>
+        </div>`,
+        )
+        .join("")}`;
+  }
+
+  const openNodes = new Set();
+
+  function renderNodes() {
+    const e = env();
+    const nodes = nodesOf(envId);
+    const all = statsOf(store.listPods(envId));
+    $("#nodes-title").textContent = e.shortName;
+    $("#nodes-summary").textContent =
+      `${nodes.length} 个节点 · ${all.total} 个 Java 目标 · ${all.injected} 个已注入 · ` +
+      `${all.mcp} 个 MCP 可用` +
+      (all.failed ? ` · ${all.failed} 个异常` : "");
+
+    $("#node-table").innerHTML = `
+      <div class="node-row head">
+        <span>节点</span><span>Pod</span><span>已注入</span><span>MCP</span><span>Namespace</span><span>探测</span><span></span>
+      </div>
+      ${nodes
+        .map((n) => {
+          const open = openNodes.has(n.node);
+          const top = n.namespaces.slice(0, 2);
+          const more = n.namespaces.length - top.length;
+          return `
+        <div class="node-row ${open ? "open" : ""}" data-node="${esc(n.node)}" role="button" tabindex="0" aria-expanded="${open}">
+          <span class="node-name">${esc(n.node)} ${n.failed ? `<small>${n.failed} 个异常</small>` : ""}</span>
+          <span class="n">${n.total}</span>
+          <span class="n">${n.injected}</span>
+          <span class="n ${n.mcp < n.injected ? "bad" : "ok"}">${n.mcp}</span>
+          <span class="ns-list">
+            ${top.map((x) => `<span class="ns-chip">${esc(x.name)}</span>`).join("")}
+            ${more > 0 ? `<span class="ns-chip more">+${more}</span>` : ""}
+          </span>
+          <span class="muted-cap">${n.at ? ago(n.at) : "—"}</span>
+          <span class="chev">›</span>
+        </div>
+        ${
+          open
+            ? `<div class="node-detail">
+                <div class="ns-row head muted-cap"><span>Namespace</span><span>Pod</span><span>已注入</span><span>MCP</span><span>探测</span></div>
+                ${n.namespaces
+                  .map(
+                    (x) => `
+                  <div class="ns-row" data-ns="${esc(x.name)}" data-node-ns="${esc(n.node)}" role="button" tabindex="0">
+                    <span class="ns-name">${esc(x.name)}</span>
+                    <span class="n">${x.total}</span>
+                    <span class="n">${x.injected}</span>
+                    <span class="n ${x.mcp < x.injected ? "bad" : "ok"}">${x.mcp}</span>
+                    <span class="muted-cap">${x.at ? ago(x.at) : "—"}</span>
+                  </div>`,
+                  )
+                  .join("")}
+              </div>`
+            : ""
+        }`;
+        })
+        .join("")}`;
   }
 
   /* ---------------------------- actions ---------------------------- */
@@ -652,13 +804,14 @@
     $("#palette-input").focus();
   }
 
-  function setEnv(id) {
+  function setEnv(id, nextView) {
     if (!state.environments.some((e) => e.id === id)) return;
     envId = id;
     nsFilter = "all";
     selected.clear();
     focusedKey = store.listPods(envId)[0]?.key || null;
-    view = "workbench";
+    if (nextView) view = nextView;
+    if (view === "overview") view = "nodes";
     renderAll();
   }
 
@@ -668,6 +821,41 @@
     const viewBtn = ev.target.closest("[data-view]");
     if (viewBtn) {
       view = viewBtn.dataset.view;
+      renderAll();
+      return;
+    }
+
+    const envRow = ev.target.closest("[data-env-row]");
+    if (envRow) {
+      setEnv(envRow.dataset.envRow, "nodes");
+      return;
+    }
+
+    const nodeRow = ev.target.closest("[data-node]");
+    if (nodeRow) {
+      const node = nodeRow.dataset.node;
+      if (openNodes.has(node)) openNodes.delete(node);
+      else openNodes.add(node);
+      renderNodes();
+      return;
+    }
+
+    const nsRow = ev.target.closest("[data-ns]");
+    if (nsRow) {
+      nsFilter = nsRow.dataset.ns;
+      view = "workbench";
+      renderAll();
+      return;
+    }
+
+    if (ev.target.closest("#targets-back")) {
+      view = "nodes";
+      renderAll();
+      return;
+    }
+
+    if (ev.target.closest("#nodes-to-targets")) {
+      view = "workbench";
       renderAll();
       return;
     }
@@ -743,6 +931,10 @@
   document.addEventListener("input", (ev) => {
     if (ev.target.id === "search") {
       query = ev.target.value;
+      if (view !== "workbench" && query.trim()) {
+        view = "workbench";
+        renderChrome();
+      }
       renderList();
     } else if (ev.target.id === "ledger-search") {
       renderLedger();
@@ -830,7 +1022,7 @@
     if (!raw) return;
     const p = new URLSearchParams(raw);
     const v = p.get("view");
-    if (["workbench", "ledger", "pipeline"].includes(v)) view = v;
+    if (["overview", "nodes", "workbench", "ledger", "pipeline"].includes(v)) view = v;
     const e = p.get("env");
     if (e && state.environments.some((x) => x.id === e)) {
       envId = e;
