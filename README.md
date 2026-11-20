@@ -20,7 +20,7 @@ The **precision split-pane prototype** pairs a compact 1px light target matrix +
 
 ![Precision split-pane diagnostics workbench](docs/images/workbench-split.png)
 
-[View zero-kubectl delivery & MCP architecture](docs/images/workbench-pipeline.png) · [View the mobile viewport](docs/images/workbench-mobile.png)
+[View zero-kubectl delivery & MCP architecture](docs/images/workbench-pipeline.png) · [View the mobile target matrix](docs/images/workbench-mobile.png) · [View the mobile evidence stage](docs/images/workbench-mobile-stage.png)
 
 [Send UI feedback](https://github.com/hatricks-s/arthas-workbench/issues/new?template=ui-feedback.yml). Please include the environment, page, viewport and steps; remove credentials and private target names from screenshots.
 

@@ -583,7 +583,8 @@ button:disabled {
   padding: 6px 10px;
   border-bottom: 1px solid var(--line);
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   background: var(--panel-bg);
   flex-shrink: 0;
 }
@@ -1145,6 +1146,8 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .stage-btn:hover {
@@ -1212,6 +1215,15 @@ button:disabled {
   gap: 6px;
   overflow-x: auto;
   padding-bottom: 2px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+
+.run-selector-strip::-webkit-scrollbar,
+.workload-strip::-webkit-scrollbar {
+  display: none;
 }
 
 .run-pill {
@@ -2200,7 +2212,19 @@ button:disabled {
   text-align: left;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
+}
+
+.chaos-btn strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.chaos-btn strong svg {
+  color: var(--accent);
+  flex-shrink: 0;
 }
 
 .chaos-btn:hover {
@@ -2334,6 +2358,125 @@ button:disabled {
   .evidence-head,
   .diff-grid-head {
     flex-wrap: wrap;
+  }
+
+  /* Narrow screens: reflow the matrix into stacked cards instead of a
+     horizontally clipped 4-column table. */
+  .matrix-scroll {
+    overflow-x: hidden;
+  }
+
+  .target-matrix,
+  .target-matrix tbody {
+    display: block;
+  }
+
+  .target-matrix thead {
+    display: none;
+  }
+
+  .target-matrix tbody tr.group-row {
+    display: block;
+  }
+
+  .target-matrix tbody tr.group-row td {
+    display: block;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .target-row {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check identity actions"
+      "check meters probe";
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 7px;
+    padding: 9px 10px;
+  }
+
+  .target-row > td {
+    display: block;
+    padding: 0 !important;
+    border-bottom: 0;
+    white-space: normal;
+  }
+
+  .target-row > td.col-check {
+    grid-area: check;
+    align-self: start;
+  }
+
+  .target-row > td:nth-child(2) {
+    grid-area: identity;
+    min-width: 0;
+  }
+
+  .target-row > td:nth-child(3) {
+    grid-area: meters;
+    min-width: 0;
+  }
+
+  .target-row > td:nth-child(4) {
+    grid-area: probe;
+    justify-self: end;
+    text-align: right;
+  }
+
+  .target-row > td.col-act {
+    grid-area: actions;
+    width: auto;
+  }
+
+  .meter-stack {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .micro-bar-row {
+    grid-template-columns: 30px minmax(48px, 1fr) 34px;
+  }
+
+  .probe-sub {
+    display: none;
+  }
+
+  .rail-btn span {
+    white-space: nowrap;
+    font-size: 10px;
+  }
+
+  .stage-header {
+    height: auto;
+    min-height: 44px;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+
+  .stage-mode-switch {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .stage-mode-switch button {
+    white-space: nowrap;
+    font-size: 11.5px;
+    padding: 4px 8px;
+  }
+
+  .stage-mode-switch em {
+    white-space: nowrap;
+  }
+
+  .stage-actions {
+    flex-shrink: 0;
+  }
+
+  .stage-body {
+    padding: 10px;
+    gap: 10px;
   }
 
   .verdict-title {

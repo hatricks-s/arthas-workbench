@@ -628,8 +628,14 @@
     const summary = store.runSummary(run.id);
     const tasks = tasksOfRun(run);
     if (!tasks.some((t) => t.id === activeDiffTaskId)) {
+      // While a run is still in flight, surface whatever is bootstrapping or
+      // sampling first, so an auto-mounted replica shows its mount progress
+      // instead of silently sitting behind an already-finished sibling.
+      const inFlight = tasks.find((t) =>
+        ["mounting", "running"].includes(t.status),
+      );
       const outlier = tasks.find((t) => t.result?.anomalous);
-      activeDiffTaskId = (outlier || tasks[0])?.id || null;
+      activeDiffTaskId = (inFlight || outlier || tasks[0])?.id || null;
     }
     const activeTask = tasks.find((t) => t.id === activeDiffTaskId) || tasks[0];
 
@@ -1009,15 +1015,15 @@
       `
         <div class="chaos-actions">
           <button type="button" class="chaos-btn" data-chaos="auto-mount-diff">
-            <strong>⚡ 演练 1：包含「未挂载副本」的一键自举并发对比</strong>
+            <strong><svg class="ic xs"><use href="#i-bolt" /></svg>演练 1：包含「未挂载副本」的一键自举并发对比</strong>
             <span>同时锁定已就绪副本与待挂载副本（00006），演示零手工干预自动流式挂载 + 接续采样对比。</span>
           </button>
           <button type="button" class="chaos-btn" data-chaos="pod-replace">
-            <strong>🔄 演练 2：采样途中 Pod 滚动重建（UID 变化绝不重放）</strong>
+            <strong><svg class="ic xs"><use href="#i-refresh" /></svg>演练 2：采样途中 Pod 滚动重建（UID 变化绝不重放）</strong>
             <span>对 3 个副本发起并发采样，随后立即触发 00002 重建为 g2，验证仅该子任务中断、不误打新容器。</span>
           </button>
           <button type="button" class="chaos-btn" data-chaos="ws-flap">
-            <strong>🔌 演练 3：K8s WebSocket 隧道闪断自愈</strong>
+            <strong><svg class="ic xs"><use href="#i-link" /></svg>演练 3：K8s WebSocket 隧道闪断自愈</strong>
             <span>模拟当前聚焦实例 WS 通道断开并在 4 秒后无进程自动重连恢复。</span>
           </button>
         </div>
@@ -1141,7 +1147,13 @@
         ...extraOptions,
       });
       activeRunId = run.id;
-      activeDiffTaskId = run.taskIds[0];
+      const launched = run.taskIds
+        .map((id) => state.tasks.find((task) => task.id === id))
+        .filter(Boolean);
+      activeDiffTaskId =
+        launched.find((task) => task.status === "mounting")?.id ||
+        launched[0]?.id ||
+        null;
       ledgerRunId = run.id;
       stageMode = "diff";
       mobilePane = "stage";
@@ -1630,6 +1642,22 @@
   resizer.addEventListener("pointerup", () => {
     dragging = false;
   });
+  resizer.addEventListener("keydown", (ev) => {
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+    ev.preventDefault();
+    const steps = [36, 40, 44, 47, 52, 56, 60];
+    const shell = $("#view-workbench");
+    const current = Number(shell.dataset.split) || 47;
+    const index = steps.indexOf(current);
+    const next =
+      steps[
+        Math.min(
+          steps.length - 1,
+          Math.max(0, (index < 0 ? 3 : index) + (ev.key === "ArrowRight" ? 1 : -1)),
+        )
+      ];
+    shell.dataset.split = String(next);
+  });
 
   /* Deterministic UI Tick Loop */
   let prevSig = "";
@@ -1654,6 +1682,13 @@
       renderAll();
     }
   }, 350);
+
+  // Shared evidence links and browser back/forward keep working inside one tab:
+  // a fragment change alone does not reload the document, so re-apply the hash.
+  window.addEventListener("hashchange", () => {
+    syncUrlHash();
+    renderAll();
+  });
 
   syncUrlHash();
   renderAll();
